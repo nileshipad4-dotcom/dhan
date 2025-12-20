@@ -1,5 +1,4 @@
 
-
 import streamlit as st
 import requests
 import pandas as pd
@@ -27,7 +26,7 @@ HEADERS = {
 # =============== PAGE CONFIG ===============
 st.set_page_config(layout="wide")
 
-# -------- AUTO REFRESH EVERY 30 SECONDS ----
+# -------- AUTO REFRESH (30 sec) ------------
 st_autorefresh(interval=30_000, key="refresh")
 
 # =============== API FUNCTIONS ===============
@@ -59,66 +58,91 @@ def get_option_chain(scrip, seg, expiry):
     return r.json().get("data")
 
 # =============== UI =========================
-st.title("📊 NIFTY & BANKNIFTY Option Chain (DhanHQ)")
+st.title("📊 Option Chain – DhanHQ")
 
-for name, cfg in UNDERLYINGS.items():
-    st.subheader(name)
+# -------- DROPDOWN TO TOGGLE UNDERLYING -----
+selected_symbol = st.selectbox(
+    "Select Index",
+    options=list(UNDERLYINGS.keys())
+)
 
-    expiries = get_expiries(cfg["scrip"], cfg["seg"])
-    if not expiries:
-        st.warning(f"No expiry data for {name}")
-        continue
+cfg = UNDERLYINGS[selected_symbol]
 
-    expiry = expiries[0]
+# -------- FETCH EXPIRY ----------------------
+expiries = get_expiries(cfg["scrip"], cfg["seg"])
+if not expiries:
+    st.warning("No expiry data available")
+    st.stop()
 
-    data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
-    if not data:
-        st.warning(f"Option chain unavailable for {name}")
-        continue
+expiry = expiries[0]  # nearest expiry
 
-    oc = data.get("oc", {})
-    if not oc:
-        st.warning(f"No option chain data for {name}")
-        continue
+data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
+if not data:
+    st.warning("Option chain unavailable")
+    st.stop()
 
-    strikes = sorted(float(k) for k in oc.keys())
-    prev_close = data.get("previous_close_price")
+oc = data.get("oc", {})
+if not oc:
+    st.warning("No option chain data")
+    st.stop()
 
-    # Safe centering logic
-    if prev_close:
-        center_strike = min(strikes, key=lambda x: abs(x - prev_close))
-    else:
-        center_strike = strikes[len(strikes) // 2]
+# ---- LIVE INDEX PRICE (for highlighting) ---
+spot_price = data.get("spot_price")
 
-    idx = strikes.index(center_strike)
-    selected_strikes = strikes[max(0, idx - 20): idx + 21]
+strikes = sorted(float(k) for k in oc.keys())
 
-    rows = []
-    for strike in selected_strikes:
-        s = oc.get(f"{strike:.6f}", {})
-        ce = s.get("ce", {})
-        pe = s.get("pe", {})
+# Center strikes safely
+if spot_price:
+    center_strike = min(strikes, key=lambda x: abs(x - spot_price))
+else:
+    center_strike = strikes[len(strikes) // 2]
 
-        rows.append({
-            "Strike": strike,
+idx = strikes.index(center_strike)
+selected_strikes = strikes[max(0, idx - 20): idx + 21]
 
-            "CE LTP": ce.get("last_price"),
-            "CE OI": ce.get("oi"),
-            "CE IV": ce.get("implied_volatility"),
-            "CE Delta": ce.get("greeks", {}).get("delta"),
-            "CE Gamma": ce.get("greeks", {}).get("gamma"),
-            "CE Vega": ce.get("greeks", {}).get("vega"),
+# -------- BUILD TABLE -----------------------
+rows = []
+for strike in selected_strikes:
+    s = oc.get(f"{strike:.6f}", {})
+    ce = s.get("ce", {})
+    pe = s.get("pe", {})
 
-            "PE LTP": pe.get("last_price"),
-            "PE OI": pe.get("oi"),
-            "PE IV": pe.get("implied_volatility"),
-            "PE Delta": pe.get("greeks", {}).get("delta"),
-            "PE Gamma": pe.get("greeks", {}).get("gamma"),
-            "PE Vega": pe.get("greeks", {}).get("vega"),
-        })
+    rows.append({
+        "Strike": strike,
 
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True)
+        "CE LTP": ce.get("last_price"),
+        "CE OI": ce.get("oi"),
+        "CE IV": ce.get("implied_volatility"),
+        "CE Delta": ce.get("greeks", {}).get("delta"),
+        "CE Gamma": ce.get("greeks", {}).get("gamma"),
+        "CE Vega": ce.get("greeks", {}).get("vega"),
+
+        "PE LTP": pe.get("last_price"),
+        "PE OI": pe.get("oi"),
+        "PE IV": pe.get("implied_volatility"),
+        "PE Delta": pe.get("greeks", {}).get("delta"),
+        "PE Gamma": pe.get("greeks", {}).get("gamma"),
+        "PE Vega": pe.get("greeks", {}).get("vega"),
+    })
+
+df = pd.DataFrame(rows)
+
+# -------- HIGHLIGHT TWO STRIKES AROUND SPOT --
+highlight_strikes = []
+if spot_price:
+    lower = max([s for s in df["Strike"] if s <= spot_price], default=None)
+    upper = min([s for s in df["Strike"] if s >= spot_price], default=None)
+    highlight_strikes = [lower, upper]
+
+def highlight_rows(row):
+    if row["Strike"] in highlight_strikes:
+        return ["background-color: #0b3c5d; color: white"] * len(row)
+    return [""] * len(row)
+
+styled_df = df.style.apply(highlight_rows, axis=1)
+
+st.subheader(f"{selected_symbol} Option Chain (Nearest Expiry)")
+st.dataframe(styled_df, use_container_width=True)
 
 st.caption(
     f"⏱ Auto-refresh every 30 seconds | Last updated: {datetime.now().strftime('%H:%M:%S')}"
