@@ -1,15 +1,24 @@
-
 import streamlit as st
 import requests
 import pandas as pd
+from datetime import datetime
 
 # ================== CONFIG ==================
 CLIENT_ID = "1102712380"
 ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJwX2lwIjoiIiwic19pcCI6IiIsImlzcyI6ImRoYW4iLCJwYXJ0bmVySWQiOiIiLCJleHAiOjE3NjYzNDc3ODYsImlhdCI6MTc2NjI2MTM4NiwidG9rZW5Db25zdW1lclR5cGUiOiJTRUxGIiwid2ViaG9va1VybCI6Imh0dHBzOi8vbG9jYWxob3N0IiwiZGhhbkNsaWVudElkIjoiMTEwMjcxMjM4MCJ9.uQ4LyVOZqiy1ZyIENwcBT0Eei8taXbR8KgNW40NV0Y3nR_AQsmAC3JtZSoFE5p2xBwwB3q6ko_JEGTe7x_2ZTA"
 
 API_BASE = "https://api.dhan.co/v2"
-UNDERLYING_SCRIP = 13      # NIFTY 50 underlying
-UNDERLYING_SEG = "IDX_I"   # segment for index
+
+UNDERLYINGS = {
+    "NIFTY": {
+        "scrip": 13,
+        "seg": "IDX_I"
+    },
+    "BANKNIFTY": {
+        "scrip": 25,
+        "seg": "IDX_I"
+    }
+}
 # ===========================================
 
 HEADERS = {
@@ -18,67 +27,77 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-@st.cache_data
-def fetch_expiries():
-    """
-    Fetches list of expiry dates for the NIFTY option chain.
-    """
-    url = f"{API_BASE}/optionchain/expirylist"
-    payload = {
-        "UnderlyingScrip": UNDERLYING_SCRIP,
-        "UnderlyingSeg": UNDERLYING_SEG
-    }
-    r = requests.post(url, headers=HEADERS, json=payload)
+# ---------- AUTO REFRESH ----------
+st.set_page_config(layout="wide")
+st.autorefresh(interval=30_000, key="refresh")
+
+# ---------- API FUNCTIONS ----------
+@st.cache_data(ttl=60)
+def get_expiries(scrip, seg):
+    r = requests.post(
+        f"{API_BASE}/optionchain/expirylist",
+        headers=HEADERS,
+        json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg}
+    )
     r.raise_for_status()
-    return r.json().get("data", [])
+    return r.json()["data"]
 
-def fetch_option_chain(expiry):
-    """
-    Fetches the raw option chain for a selected expiry
-    """
-    url = f"{API_BASE}/optionchain"
-    payload = {
-        "UnderlyingScrip": UNDERLYING_SCRIP,
-        "UnderlyingSeg": UNDERLYING_SEG,
-        "Expiry": expiry
-    }
-    r = requests.post(url, headers=HEADERS, json=payload)
+def get_option_chain(scrip, seg, expiry):
+    r = requests.post(
+        f"{API_BASE}/optionchain",
+        headers=HEADERS,
+        json={
+            "UnderlyingScrip": scrip,
+            "UnderlyingSeg": seg,
+            "Expiry": expiry
+        }
+    )
     r.raise_for_status()
-    return r.json().get("data", {}).get("oc", {})
+    return r.json()["data"]
 
-# =============== STREAMLIT UI ===============
-st.set_page_config(page_title="NIFTY Option Chain (DhanHQ)", layout="wide")
-st.title("📊 NIFTY Option Chain – DhanHQ API")
+# ---------- UI ----------
+st.title("📊 NIFTY & BANKNIFTY Option Chain – DhanHQ")
 
-try:
-    expiry_list = fetch_expiries()
-except Exception as e:
-    st.error("Failed to fetch expiry list. Check your client-id / token or network.")
-    st.stop()
+for name, cfg in UNDERLYINGS.items():
+    st.markdown(f"## 🔹 {name}")
 
-if not expiry_list:
-    st.warning("No expiry dates returned by the API.")
-    st.stop()
+    expiries = get_expiries(cfg["scrip"], cfg["seg"])
+    expiry = expiries[0]
 
-selected_expiry = st.selectbox("Select Expiry", expiry_list)
+    data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
 
-if st.button("Load Chain"):
-    with st.spinner("Fetching option chain…"):
-        raw_chain = fetch_option_chain(selected_expiry)
+    spot = data.get("spot_price")
+    prev_close = data.get("previous_close_price")
+    pct_change = ((spot - prev_close) / prev_close) * 100 if prev_close else 0
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Spot Price", f"{spot:.2f}")
+    col2.metric("Prev Close", f"{prev_close:.2f}")
+    col3.metric("% Change", f"{pct_change:.2f}%")
+
+    oc = data["oc"]
+
+    # -------- FILTER ±20 STRIKES AROUND PREV CLOSE --------
+    strikes = sorted(float(k) for k in oc.keys())
+    nearest = min(strikes, key=lambda x: abs(x - prev_close))
+    idx = strikes.index(nearest)
+
+    lower = max(0, idx - 20)
+    upper = min(len(strikes), idx + 21)
+    selected_strikes = strikes[lower:upper]
 
     rows = []
-    for strike, strike_data in raw_chain.items():
-        ce = strike_data.get("ce", {})
-        pe = strike_data.get("pe", {})
+    for strike in selected_strikes:
+        s = oc[str(f"{strike:.6f}")]
+        ce, pe = s.get("ce", {}), s.get("pe", {})
 
         rows.append({
-            "Strike": float(strike),
+            "Strike": strike,
 
             "CE LTP": ce.get("last_price"),
             "CE OI": ce.get("oi"),
             "CE IV": ce.get("implied_volatility"),
             "CE Delta": ce.get("greeks", {}).get("delta"),
-            "CE Theta": ce.get("greeks", {}).get("theta"),
             "CE Gamma": ce.get("greeks", {}).get("gamma"),
             "CE Vega": ce.get("greeks", {}).get("vega"),
 
@@ -86,12 +105,11 @@ if st.button("Load Chain"):
             "PE OI": pe.get("oi"),
             "PE IV": pe.get("implied_volatility"),
             "PE Delta": pe.get("greeks", {}).get("delta"),
-            "PE Theta": pe.get("greeks", {}).get("theta"),
             "PE Gamma": pe.get("greeks", {}).get("gamma"),
             "PE Vega": pe.get("greeks", {}).get("vega"),
         })
 
-    df = pd.DataFrame(rows).sort_values("Strike")
-
-    st.subheader(f"🔁 Option Chain for {selected_expiry}")
+    df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True)
+
+st.caption(f"⏱ Auto-refresh every 30 seconds | Last updated: {datetime.now().strftime('%H:%M:%S')}")
