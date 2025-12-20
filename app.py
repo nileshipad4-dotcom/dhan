@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
+from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
 
 # ================= CONFIG =================
@@ -8,7 +9,19 @@ CLIENT_ID = "1102712380"
 ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJwX2lwIjoiIiwic19pcCI6IiIsImlzcyI6ImRoYW4iLCJwYXJ0bmVySWQiOiIiLCJleHAiOjE3NjYzNDc3ODYsImlhdCI6MTc2NjI2MTM4NiwidG9rZW5Db25zdW1lclR5cGUiOiJTRUxGIiwid2ViaG9va1VybCI6Imh0dHBzOi8vbG9jYWxob3N0IiwiZGhhbkNsaWVudElkIjoiMTEwMjcxMjM4MCJ9.uQ4LyVOZqiy1ZyIENwcBT0Eei8taXbR8KgNW40NV0Y3nR_AQsmAC3JtZSoFE5p2xBwwB3q6ko_JEGTe7x_2ZTA"
 
 API_BASE = "https://api.dhan.co/v2"
-INSTRUMENT_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
+
+UNDERLYINGS = {
+    "NIFTY": {
+        "scrip": 13,
+        "seg": "IDX_I",
+        "security_id": 256265
+    },
+    "BANKNIFTY": {
+        "scrip": 25,
+        "seg": "IDX_I",
+        "security_id": 260105
+    }
+}
 
 HEADERS = {
     "client-id": CLIENT_ID,
@@ -16,130 +29,148 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# =============== PAGE CONFIG ===============
 st.set_page_config(layout="wide")
-st.title("📊 All F&O Stocks – Option Chain (Single Table)")
+st_autorefresh(interval=30_000, key="refresh")
 
-# ============ LOAD F&O STOCKS =============
-@st.cache_data(ttl=3600)
-def get_fno_stocks():
-    df = pd.read_csv(INSTRUMENT_URL, low_memory=False)
+# =============== API FUNCTIONS ===============
+@st.cache_data(ttl=5)
+def get_index_price(security_id):
+    url = f"{API_BASE}/marketfeed/ltp"
+    payload = {"NSE_IDX": [security_id]}
 
-    # NSE F&O equities only
-    fno = df[
-        (df["SEM_SEGMENT"] == "NSE_FNO") &
-        (df["SEM_INSTRUMENT_NAME"] == "OPTSTK")
-    ]
+    r = requests.post(url, headers=HEADERS, json=payload)
+    if r.status_code != 200:
+        return None, None
 
-    return (
-        fno[["SEM_SMST_SECURITY_ID", "SEM_TRADING_SYMBOL"]]
-        .drop_duplicates()
-        .rename(columns={
-            "SEM_SMST_SECURITY_ID": "security_id",
-            "SEM_TRADING_SYMBOL": "symbol"
-        })
-    )
+    data = r.json().get("data", {}).get(str(security_id), {})
+    return data.get("ltp"), data.get("previous_close")
 
-fno_stocks = get_fno_stocks()
 
-st.info(f"Total F&O Stocks Loaded: {len(fno_stocks)}")
-
-# ============ API HELPERS =================
-def get_expiry(security_id):
+@st.cache_data(ttl=120)
+def get_expiries(scrip, seg):
     r = requests.post(
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
-        json={"UnderlyingScrip": security_id, "UnderlyingSeg": "NSE_FNO"}
+        json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg}
     )
-    if r.status_code != 200:
-        return None
-    data = r.json().get("data", [])
-    return data[0] if data else None
+    return r.json().get("data", []) if r.status_code == 200 else []
 
 
-def get_option_chain(security_id, expiry):
+@st.cache_data(ttl=30)
+def get_option_chain(scrip, seg, expiry):
     r = requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
         json={
-            "UnderlyingScrip": security_id,
-            "UnderlyingSeg": "NSE_FNO",
+            "UnderlyingScrip": scrip,
+            "UnderlyingSeg": seg,
             "Expiry": expiry
         }
     )
-    if r.status_code != 200:
-        return None
-    return r.json().get("data", {}).get("oc", {})
+    return r.json().get("data") if r.status_code == 200 else None
 
-# ============ BUILD TABLE =================
+# =============== UI =========================
+st.title("📊 Option Chain – DhanHQ")
+
+symbol = st.selectbox("Select Index", list(UNDERLYINGS.keys()))
+cfg = UNDERLYINGS[symbol]
+
+# -------- LIVE INDEX PRICE ------------------
+index_ltp, prev_close = get_index_price(cfg["security_id"])
+
+pct_change = (
+    ((index_ltp - prev_close) / prev_close) * 100
+    if index_ltp and prev_close else None
+)
+
+c1, c2, c3 = st.columns(3)
+c1.metric("Current Price", f"{index_ltp:.2f}" if index_ltp else "N/A")
+c2.metric("Previous Close", f"{prev_close:.2f}" if prev_close else "N/A")
+c3.metric("% Change", f"{pct_change:.2f}%" if pct_change else "N/A")
+
+# -------- OPTION CHAIN ---------------------
+expiries = get_expiries(cfg["scrip"], cfg["seg"])
+if not expiries:
+    st.warning("No expiry data")
+    st.stop()
+
+expiry = expiries[0]
+
+data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
+if not data:
+    st.warning("Option chain unavailable")
+    st.stop()
+
+oc = data.get("oc", {})
+strikes = sorted(float(k) for k in oc.keys())
+
+# Center strikes around live price
+center = (
+    min(strikes, key=lambda x: abs(x - index_ltp))
+    if index_ltp else strikes[len(strikes) // 2]
+)
+
+idx = strikes.index(center)
+selected_strikes = strikes[max(0, idx - 20): idx + 21]
+
+# -------- BUILD TABLE ----------------------
 rows = []
+for strike in selected_strikes:
+    s = oc.get(f"{strike:.6f}", {})
+    ce = s.get("ce", {})
+    pe = s.get("pe", {})
 
-MAX_STOCKS = st.slider("Max stocks to load (performance)", 1, 25, 5)
+    rows.append({
+        "Strike": strike,
 
-for _, stock in fno_stocks.head(MAX_STOCKS).iterrows():
-    symbol = stock["symbol"]
-    security_id = stock["security_id"]
+        "CE LTP": ce.get("last_price"),
+        "CE OI": ce.get("oi"),
+        "CE Volume": ce.get("volume"),
 
-    expiry = get_expiry(security_id)
-    if not expiry:
-        continue
+        "CE IV": int(ce["implied_volatility"] * 10000)
+        if ce.get("implied_volatility") is not None else None,
 
-    oc = get_option_chain(security_id, expiry)
-    if not oc:
-        continue
+        "CE Delta": int(ce["greeks"]["delta"] * 100000)
+        if ce.get("greeks", {}).get("delta") is not None else None,
 
-    strikes = sorted(float(k) for k in oc.keys())
+        "CE Gamma": int(ce["greeks"]["gamma"] * 10000000)
+        if ce.get("greeks", {}).get("gamma") is not None else None,
 
-    # Use middle strikes (no spot available reliably)
-    mid = len(strikes) // 2
-    selected = strikes[mid - 5: mid + 6]
+        "CE Vega": int(ce["greeks"]["vega"] * 10000)
+        if ce.get("greeks", {}).get("vega") is not None else None,
 
-    for strike in selected:
-        s = oc.get(f"{strike:.6f}", {})
-        ce = s.get("ce", {})
-        pe = s.get("pe", {})
+        "PE LTP": pe.get("last_price"),
+        "PE OI": pe.get("oi"),
+        "PE Volume": pe.get("volume"),
 
-        rows.append({
-            "Symbol": symbol,
-            "Strike": strike,
+        "PE IV": int(pe["implied_volatility"] * 10000)
+        if pe.get("implied_volatility") is not None else None,
 
-            "CE LTP": ce.get("last_price"),
-            "CE OI": ce.get("oi"),
-            "CE Vol": ce.get("volume"),
+        "PE Delta": int(pe["greeks"]["delta"] * 100000)
+        if pe.get("greeks", {}).get("delta") is not None else None,
 
-            "CE IV": int(ce["implied_volatility"] * 10000)
-            if ce.get("implied_volatility") is not None else None,
+        "PE Gamma": int(pe["greeks"]["gamma"] * 10000000)
+        if pe.get("greeks", {}).get("gamma") is not None else None,
 
-            "CE Δ": int(ce["greeks"]["delta"] * 100000)
-            if ce.get("greeks", {}).get("delta") is not None else None,
-
-            "CE Γ": int(ce["greeks"]["gamma"] * 10000000)
-            if ce.get("greeks", {}).get("gamma") is not None else None,
-
-            "CE V": int(ce["greeks"]["vega"] * 10000)
-            if ce.get("greeks", {}).get("vega") is not None else None,
-
-            "PE LTP": pe.get("last_price"),
-            "PE OI": pe.get("oi"),
-            "PE Vol": pe.get("volume"),
-
-            "PE IV": int(pe["implied_volatility"] * 10000)
-            if pe.get("implied_volatility") is not None else None,
-
-            "PE Δ": int(pe["greeks"]["delta"] * 100000)
-            if pe.get("greeks", {}).get("delta") is not None else None,
-
-            "PE Γ": int(pe["greeks"]["gamma"] * 10000000)
-            if pe.get("greeks", {}).get("gamma") is not None else None,
-
-            "PE V": int(pe["greeks"]["vega"] * 10000)
-            if pe.get("greeks", {}).get("vega") is not None else None,
-        })
-
-    # ---------- WHITE SEPARATOR ROW ----------
-    rows.append({col: "" for col in rows[-1].keys()})
+        "PE Vega": int(pe["greeks"]["vega"] * 10000)
+        if pe.get("greeks", {}).get("vega") is not None else None,
+    })
 
 df = pd.DataFrame(rows)
 
-st.dataframe(df, use_container_width=True)
+# -------- HIGHLIGHT TWO STRIKES ------------
+highlight = []
+if index_ltp:
+    lower = max([s for s in df["Strike"] if s <= index_ltp], default=None)
+    upper = min([s for s in df["Strike"] if s >= index_ltp], default=None)
+    highlight = [lower, upper]
 
-st.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
+def highlight_rows(row):
+    if row["Strike"] in highlight:
+        return ["background-color:#003366;color:white"] * len(row)
+    return [""] * len(row)
+
+st.dataframe(df.style.apply(highlight_rows, axis=1), use_container_width=True)
+
+st.caption(f"⏱ Auto-refresh every 30 seconds | {datetime.now().strftime('%H:%M:%S')}")
