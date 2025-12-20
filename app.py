@@ -1,4 +1,5 @@
 
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -12,8 +13,16 @@ ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJwX2lwIjoiIiwic19pcCI6IiI
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
-    "NIFTY": {"scrip": 13, "seg": "IDX_I"},
-    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I"}
+    "NIFTY": {
+        "scrip": 13,
+        "seg": "IDX_I",
+        "security_id": 256265
+    },
+    "BANKNIFTY": {
+        "scrip": 25,
+        "seg": "IDX_I",
+        "security_id": 260105
+    }
 }
 # ===========================================
 
@@ -25,11 +34,21 @@ HEADERS = {
 
 # =============== PAGE CONFIG ===============
 st.set_page_config(layout="wide")
-
-# -------- AUTO REFRESH (30 sec) ------------
 st_autorefresh(interval=30_000, key="refresh")
 
 # =============== API FUNCTIONS ===============
+@st.cache_data(ttl=60)
+def get_index_price(security_id):
+    url = f"{API_BASE}/market/quote"
+    payload = {"securities": {"NSE": [security_id]}}
+    r = requests.post(url, headers=HEADERS, json=payload)
+    if r.status_code != 200:
+        return None, None
+
+    d = r.json()["data"]["NSE"][str(security_id)]
+    return d.get("last_price"), d.get("previous_close")
+
+
 @st.cache_data(ttl=120)
 def get_expiries(scrip, seg):
     r = requests.post(
@@ -37,9 +56,7 @@ def get_expiries(scrip, seg):
         headers=HEADERS,
         json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg}
     )
-    if r.status_code != 200:
-        return []
-    return r.json().get("data", [])
+    return r.json().get("data", []) if r.status_code == 200 else []
 
 
 @st.cache_data(ttl=30)
@@ -53,14 +70,12 @@ def get_option_chain(scrip, seg, expiry):
             "Expiry": expiry
         }
     )
-    if r.status_code != 200:
-        return None
-    return r.json().get("data")
+    return r.json().get("data") if r.status_code == 200 else None
 
 # =============== UI =========================
-st.title("📊 Option Chain – DhanHQ")
+st.title("📊 NIFTY / BANKNIFTY Option Chain – DhanHQ")
 
-# -------- DROPDOWN TO TOGGLE UNDERLYING -----
+# -------- DROPDOWN --------------------------
 selected_symbol = st.selectbox(
     "Select Index",
     options=list(UNDERLYINGS.keys())
@@ -68,13 +83,25 @@ selected_symbol = st.selectbox(
 
 cfg = UNDERLYINGS[selected_symbol]
 
-# -------- FETCH EXPIRY ----------------------
+# -------- LIVE INDEX PRICE ------------------
+index_ltp, prev_close = get_index_price(cfg["security_id"])
+pct_change = (
+    ((index_ltp - prev_close) / prev_close) * 100
+    if index_ltp and prev_close else None
+)
+
+c1, c2, c3 = st.columns(3)
+c1.metric("Current Price", f"{index_ltp:.2f}" if index_ltp else "N/A")
+c2.metric("Previous Close", f"{prev_close:.2f}" if prev_close else "N/A")
+c3.metric("% Change", f"{pct_change:.2f}%" if pct_change else "N/A")
+
+# -------- OPTION CHAIN ----------------------
 expiries = get_expiries(cfg["scrip"], cfg["seg"])
 if not expiries:
     st.warning("No expiry data available")
     st.stop()
 
-expiry = expiries[0]  # nearest expiry
+expiry = expiries[0]
 
 data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
 if not data:
@@ -86,21 +113,18 @@ if not oc:
     st.warning("No option chain data")
     st.stop()
 
-# ---- LIVE INDEX PRICE (for highlighting) ---
-spot_price = data.get("spot_price")
-
 strikes = sorted(float(k) for k in oc.keys())
 
-# Center strikes safely
-if spot_price:
-    center_strike = min(strikes, key=lambda x: abs(x - spot_price))
-else:
-    center_strike = strikes[len(strikes) // 2]
+# Center around LIVE PRICE
+center = (
+    min(strikes, key=lambda x: abs(x - index_ltp))
+    if index_ltp else
+    strikes[len(strikes) // 2]
+)
 
-idx = strikes.index(center_strike)
+idx = strikes.index(center)
 selected_strikes = strikes[max(0, idx - 20): idx + 21]
 
-# -------- BUILD TABLE -----------------------
 rows = []
 for strike in selected_strikes:
     s = oc.get(f"{strike:.6f}", {})
@@ -127,16 +151,16 @@ for strike in selected_strikes:
 
 df = pd.DataFrame(rows)
 
-# -------- HIGHLIGHT TWO STRIKES AROUND SPOT --
-highlight_strikes = []
-if spot_price:
-    lower = max([s for s in df["Strike"] if s <= spot_price], default=None)
-    upper = min([s for s in df["Strike"] if s >= spot_price], default=None)
-    highlight_strikes = [lower, upper]
+# -------- HIGHLIGHT TWO STRIKES --------------
+highlight = []
+if index_ltp:
+    lower = max([s for s in df["Strike"] if s <= index_ltp], default=None)
+    upper = min([s for s in df["Strike"] if s >= index_ltp], default=None)
+    highlight = [lower, upper]
 
 def highlight_rows(row):
-    if row["Strike"] in highlight_strikes:
-        return ["background-color: #0b3c5d; color: white"] * len(row)
+    if row["Strike"] in highlight:
+        return ["background-color:#0b3c5d;color:white"] * len(row)
     return [""] * len(row)
 
 styled_df = df.style.apply(highlight_rows, axis=1)
