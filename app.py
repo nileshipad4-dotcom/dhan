@@ -1,4 +1,5 @@
 
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -12,14 +13,8 @@ ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJwX2lwIjoiIiwic19pcCI6IiI
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
-    "NIFTY": {
-        "scrip": 13,
-        "seg": "IDX_I"
-    },
-    "BANKNIFTY": {
-        "scrip": 25,
-        "seg": "IDX_I"
-    }
+    "NIFTY": {"scrip": 13, "seg": "IDX_I"},
+    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I"}
 }
 # ===========================================
 
@@ -30,12 +25,9 @@ HEADERS = {
 }
 
 # =============== PAGE CONFIG ===============
-st.set_page_config(
-    page_title="NIFTY & BANKNIFTY Option Chain",
-    layout="wide"
-)
+st.set_page_config(layout="wide")
 
-# -------- AUTO REFRESH (30 seconds) --------
+# -------- AUTO REFRESH EVERY 30 SECONDS ----
 st_autorefresh(interval=30_000, key="refresh")
 
 # =============== API FUNCTIONS ===============
@@ -44,10 +36,7 @@ def get_expiries(scrip, seg):
     r = requests.post(
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
-        json={
-            "UnderlyingScrip": scrip,
-            "UnderlyingSeg": seg
-        }
+        json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg}
     )
     if r.status_code != 200:
         return []
@@ -65,56 +54,44 @@ def get_option_chain(scrip, seg, expiry):
             "Expiry": expiry
         }
     )
-
     if r.status_code != 200:
         return None
-
     return r.json().get("data")
 
-# =============== UI ===============
+# =============== UI =========================
 st.title("📊 NIFTY & BANKNIFTY Option Chain (DhanHQ)")
 
 for name, cfg in UNDERLYINGS.items():
-    st.markdown(f"## 🔹 {name}")
+    st.subheader(name)
 
     expiries = get_expiries(cfg["scrip"], cfg["seg"])
     if not expiries:
         st.warning(f"No expiry data for {name}")
         continue
 
-    expiry = expiries[0]  # nearest expiry
+    expiry = expiries[0]
 
     data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
-    if data is None:
+    if not data:
         st.warning(f"Option chain unavailable for {name}")
         continue
 
     oc = data.get("oc", {})
+    if not oc:
+        st.warning(f"No option chain data for {name}")
+        continue
+
+    strikes = sorted(float(k) for k in oc.keys())
     prev_close = data.get("previous_close_price")
 
-# If previous close missing, fallback to middle strike
-        strikes = sorted(float(k) for k in oc.keys())
-        
-        if prev_close:
-            nearest = min(strikes, key=lambda x: abs(x - prev_close))
-        else:
-            nearest = strikes[len(strikes) // 2]   # fallback
-        
-        idx = strikes.index(nearest)
-        
-        lower = max(0, idx - 20)
-        upper = min(len(strikes), idx + 21)
-        selected_strikes = strikes[lower:upper]
+    # Safe centering logic
+    if prev_close:
+        center_strike = min(strikes, key=lambda x: abs(x - prev_close))
+    else:
+        center_strike = strikes[len(strikes) // 2]
 
-
-    # -------- FILTER ±20 STRIKES AROUND PREV CLOSE --------
-    strikes = sorted(float(k) for k in oc.keys())
-    nearest = min(strikes, key=lambda x: abs(x - prev_close))
-    idx = strikes.index(nearest)
-
-    lower = max(0, idx - 20)
-    upper = min(len(strikes), idx + 21)
-    selected_strikes = strikes[lower:upper]
+    idx = strikes.index(center_strike)
+    selected_strikes = strikes[max(0, idx - 20): idx + 21]
 
     rows = []
     for strike in selected_strikes:
