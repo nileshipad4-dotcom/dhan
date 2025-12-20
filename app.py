@@ -93,18 +93,18 @@ for name, cfg in UNDERLYINGS.items():
     prev_close = data.get("previous_close_price")
 
 # If previous close missing, fallback to middle strike
-strikes = sorted(float(k) for k in oc.keys())
-
-if prev_close:
-    nearest = min(strikes, key=lambda x: abs(x - prev_close))
-else:
-    nearest = strikes[len(strikes) // 2]   # fallback
-
-idx = strikes.index(nearest)
-
-lower = max(0, idx - 20)
-upper = min(len(strikes), idx + 21)
-selected_strikes = strikes[lower:upper]
+        strikes = sorted(float(k) for k in oc.keys())
+        
+        if prev_close:
+            nearest = min(strikes, key=lambda x: abs(x - prev_close))
+        else:
+            nearest = strikes[len(strikes) // 2]   # fallback
+        
+        idx = strikes.index(nearest)
+        
+        lower = max(0, idx - 20)
+        upper = min(len(strikes), idx + 21)
+        selected_strikes = strikes[lower:upper]
 
 
     # -------- FILTER ±20 STRIKES AROUND PREV CLOSE --------
