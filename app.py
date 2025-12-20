@@ -92,9 +92,20 @@ for name, cfg in UNDERLYINGS.items():
     oc = data.get("oc", {})
     prev_close = data.get("previous_close_price")
 
-    if not oc or not prev_close:
-        st.warning(f"Incomplete option chain data for {name}")
-        continue
+# If previous close missing, fallback to middle strike
+strikes = sorted(float(k) for k in oc.keys())
+
+if prev_close:
+    nearest = min(strikes, key=lambda x: abs(x - prev_close))
+else:
+    nearest = strikes[len(strikes) // 2]   # fallback
+
+idx = strikes.index(nearest)
+
+lower = max(0, idx - 20)
+upper = min(len(strikes), idx + 21)
+selected_strikes = strikes[lower:upper]
+
 
     # -------- FILTER ±20 STRIKES AROUND PREV CLOSE --------
     strikes = sorted(float(k) for k in oc.keys())
