@@ -1,4 +1,5 @@
 
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -37,26 +38,15 @@ st_autorefresh(interval=30_000, key="refresh")
 # =============== API FUNCTIONS ===============
 @st.cache_data(ttl=5)
 def get_index_price(security_id):
-    """
-    CORRECT way to fetch index LTP using Market Quote API
-    """
     url = f"{API_BASE}/marketfeed/ltp"
-    payload = {
-        "NSE_IDX": [security_id]   # 🔥 THIS WAS THE BUG
-    }
+    payload = {"NSE_IDX": [security_id]}
 
     r = requests.post(url, headers=HEADERS, json=payload)
-
     if r.status_code != 200:
         return None, None
 
-    data = r.json().get("data", {})
-    idx_data = data.get(str(security_id), {})
-
-    ltp = idx_data.get("ltp")
-    prev_close = idx_data.get("previous_close")
-
-    return ltp, prev_close
+    data = r.json().get("data", {}).get(str(security_id), {})
+    return data.get("ltp"), data.get("previous_close")
 
 
 @st.cache_data(ttl=120)
@@ -88,7 +78,7 @@ st.title("📊 Option Chain – DhanHQ")
 symbol = st.selectbox("Select Index", list(UNDERLYINGS.keys()))
 cfg = UNDERLYINGS[symbol]
 
-# -------- LIVE PRICE (NOW WORKS) ----------
+# -------- LIVE INDEX PRICE ------------------
 index_ltp, prev_close = get_index_price(cfg["security_id"])
 
 pct_change = (
@@ -117,16 +107,16 @@ if not data:
 oc = data.get("oc", {})
 strikes = sorted(float(k) for k in oc.keys())
 
-# Center around LIVE PRICE
+# Center strikes around live price
 center = (
     min(strikes, key=lambda x: abs(x - index_ltp))
-    if index_ltp else
-    strikes[len(strikes) // 2]
+    if index_ltp else strikes[len(strikes) // 2]
 )
 
 idx = strikes.index(center)
 selected_strikes = strikes[max(0, idx - 20): idx + 21]
 
+# -------- BUILD TABLE ----------------------
 rows = []
 for strike in selected_strikes:
     s = oc.get(f"{strike:.6f}", {})
@@ -138,17 +128,35 @@ for strike in selected_strikes:
 
         "CE LTP": ce.get("last_price"),
         "CE OI": ce.get("oi"),
-        "CE IV": ce.get("implied_volatility"),
-        "CE Delta": ce.get("greeks", {}).get("delta"),
-        "CE Gamma": ce.get("greeks", {}).get("gamma"),
-        "CE Vega": ce.get("greeks", {}).get("vega"),
+        "CE Volume": ce.get("volume"),
+
+        "CE IV": int(ce["implied_volatility"] * 10000)
+        if ce.get("implied_volatility") is not None else None,
+
+        "CE Delta": int(ce["greeks"]["delta"] * 100000)
+        if ce.get("greeks", {}).get("delta") is not None else None,
+
+        "CE Gamma": int(ce["greeks"]["gamma"] * 10000000)
+        if ce.get("greeks", {}).get("gamma") is not None else None,
+
+        "CE Vega": int(ce["greeks"]["vega"] * 10000)
+        if ce.get("greeks", {}).get("vega") is not None else None,
 
         "PE LTP": pe.get("last_price"),
         "PE OI": pe.get("oi"),
-        "PE IV": pe.get("implied_volatility"),
-        "PE Delta": pe.get("greeks", {}).get("delta"),
-        "PE Gamma": pe.get("greeks", {}).get("gamma"),
-        "PE Vega": pe.get("greeks", {}).get("vega"),
+        "PE Volume": pe.get("volume"),
+
+        "PE IV": int(pe["implied_volatility"] * 10000)
+        if pe.get("implied_volatility") is not None else None,
+
+        "PE Delta": int(pe["greeks"]["delta"] * 100000)
+        if pe.get("greeks", {}).get("delta") is not None else None,
+
+        "PE Gamma": int(pe["greeks"]["gamma"] * 10000000)
+        if pe.get("greeks", {}).get("gamma") is not None else None,
+
+        "PE Vega": int(pe["greeks"]["vega"] * 10000)
+        if pe.get("greeks", {}).get("vega") is not None else None,
     })
 
 df = pd.DataFrame(rows)
@@ -167,4 +175,4 @@ def highlight_rows(row):
 
 st.dataframe(df.style.apply(highlight_rows, axis=1), use_container_width=True)
 
-st.caption(f"⏱ Auto-refresh 30s | {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"⏱ Auto-refresh every 30 seconds | {datetime.now().strftime('%H:%M:%S')}")
