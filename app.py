@@ -135,14 +135,20 @@ for strike in selected_strikes:
 
     rows.append({
         "Strike": strike,
+
         "CE LTP": ce.get("last_price"),
         "CE OI": ce.get("oi"),
         "CE IV": ce.get("implied_volatility"),
         "CE Delta": ce.get("greeks", {}).get("delta"),
+        "CE Gamma": ce.get("greeks", {}).get("gamma"),
+        "CE Vega": ce.get("greeks", {}).get("vega"),
+
         "PE LTP": pe.get("last_price"),
         "PE OI": pe.get("oi"),
         "PE IV": pe.get("implied_volatility"),
         "PE Delta": pe.get("greeks", {}).get("delta"),
+        "PE Gamma": pe.get("greeks", {}).get("gamma"),
+        "PE Vega": pe.get("greeks", {}).get("vega"),
     })
 
 df = pd.DataFrame(rows)
