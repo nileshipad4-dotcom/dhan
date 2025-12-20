@@ -1,15 +1,16 @@
+
 import streamlit as st
 import requests
 import pandas as pd
 
-# ================= CONFIG =================
+# ================== CONFIG ==================
 CLIENT_ID = "1102712380"
 ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJwX2lwIjoiIiwic19pcCI6IiIsImlzcyI6ImRoYW4iLCJwYXJ0bmVySWQiOiIiLCJleHAiOjE3NjYzNDc3ODYsImlhdCI6MTc2NjI2MTM4NiwidG9rZW5Db25zdW1lclR5cGUiOiJTRUxGIiwid2ViaG9va1VybCI6Imh0dHBzOi8vbG9jYWxob3N0IiwiZGhhbkNsaWVudElkIjoiMTEwMjcxMjM4MCJ9.uQ4LyVOZqiy1ZyIENwcBT0Eei8taXbR8KgNW40NV0Y3nR_AQsmAC3JtZSoFE5p2xBwwB3q6ko_JEGTe7x_2ZTA"
 
 API_BASE = "https://api.dhan.co/v2"
-UNDERLYING_SCRIP = 13      # NIFTY
-UNDERLYING_SEG = "IDX_I"
-# =========================================
+UNDERLYING_SCRIP = 13      # NIFTY 50 underlying
+UNDERLYING_SEG = "IDX_I"   # segment for index
+# ===========================================
 
 HEADERS = {
     "client-id": CLIENT_ID,
@@ -17,9 +18,11 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-
 @st.cache_data
-def get_expiry_list():
+def fetch_expiries():
+    """
+    Fetches list of expiry dates for the NIFTY option chain.
+    """
     url = f"{API_BASE}/optionchain/expirylist"
     payload = {
         "UnderlyingScrip": UNDERLYING_SCRIP,
@@ -27,10 +30,12 @@ def get_expiry_list():
     }
     r = requests.post(url, headers=HEADERS, json=payload)
     r.raise_for_status()
-    return r.json()["data"]
+    return r.json().get("data", [])
 
-
-def get_option_chain(expiry):
+def fetch_option_chain(expiry):
+    """
+    Fetches the raw option chain for a selected expiry
+    """
     url = f"{API_BASE}/optionchain"
     payload = {
         "UnderlyingScrip": UNDERLYING_SCRIP,
@@ -39,47 +44,54 @@ def get_option_chain(expiry):
     }
     r = requests.post(url, headers=HEADERS, json=payload)
     r.raise_for_status()
-    return r.json()["data"]["oc"]
+    return r.json().get("data", {}).get("oc", {})
 
-
-# ================= STREAMLIT UI =================
-st.set_page_config(page_title="NIFTY Option Chain", layout="wide")
-st.title("📊 NIFTY Option Chain – Dhan API")
+# =============== STREAMLIT UI ===============
+st.set_page_config(page_title="NIFTY Option Chain (DhanHQ)", layout="wide")
+st.title("📊 NIFTY Option Chain – DhanHQ API")
 
 try:
-    expiries = get_expiry_list()
+    expiry_list = fetch_expiries()
 except Exception as e:
-    st.error("Authentication failed. Check client-id or access-token.")
+    st.error("Failed to fetch expiry list. Check your client-id / token or network.")
     st.stop()
 
-expiry = st.selectbox("Select Expiry", expiries)
+if not expiry_list:
+    st.warning("No expiry dates returned by the API.")
+    st.stop()
 
-if st.button("Load Option Chain"):
-    with st.spinner("Fetching option chain..."):
-        oc = get_option_chain(expiry)
+selected_expiry = st.selectbox("Select Expiry", expiry_list)
+
+if st.button("Load Chain"):
+    with st.spinner("Fetching option chain…"):
+        raw_chain = fetch_option_chain(selected_expiry)
 
     rows = []
-    for strike, data in oc.items():
-        ce = data.get("ce", {})
-        pe = data.get("pe", {})
+    for strike, strike_data in raw_chain.items():
+        ce = strike_data.get("ce", {})
+        pe = strike_data.get("pe", {})
 
         rows.append({
             "Strike": float(strike),
 
             "CE LTP": ce.get("last_price"),
             "CE OI": ce.get("oi"),
-            "CE Delta": ce.get("delta"),
-            "CE Gamma": ce.get("gamma"),
-            "CE Vega": ce.get("vega"),
+            "CE IV": ce.get("implied_volatility"),
+            "CE Delta": ce.get("greeks", {}).get("delta"),
+            "CE Theta": ce.get("greeks", {}).get("theta"),
+            "CE Gamma": ce.get("greeks", {}).get("gamma"),
+            "CE Vega": ce.get("greeks", {}).get("vega"),
 
             "PE LTP": pe.get("last_price"),
             "PE OI": pe.get("oi"),
-            "PE Delta": pe.get("delta"),
-            "PE Gamma": pe.get("gamma"),
-            "PE Vega": pe.get("vega"),
+            "PE IV": pe.get("implied_volatility"),
+            "PE Delta": pe.get("greeks", {}).get("delta"),
+            "PE Theta": pe.get("greeks", {}).get("theta"),
+            "PE Gamma": pe.get("greeks", {}).get("gamma"),
+            "PE Vega": pe.get("greeks", {}).get("vega"),
         })
 
     df = pd.DataFrame(rows).sort_values("Strike")
 
-    st.subheader(f"Option Chain – Expiry {expiry}")
+    st.subheader(f"🔁 Option Chain for {selected_expiry}")
     st.dataframe(df, use_container_width=True)
