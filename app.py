@@ -1,15 +1,35 @@
 
+# ================= CONFIG =================
 
 import streamlit as st
 import requests
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
+import os
+
+# ================= CSV STORAGE =================
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+def save_to_csv(df, symbol):
+    file_path = f"{DATA_DIR}/{symbol.lower()}.csv"
+
+    if os.path.exists(file_path):
+        existing = pd.read_csv(file_path)
+        last_time = pd.to_datetime(existing["timestamp"]).max()
+
+        if (datetime.now() - last_time).total_seconds() < 300:
+            return
+
+        df.to_csv(file_path, mode="a", header=False, index=False)
+    else:
+        df.to_csv(file_path, index=False)
+
 
 # ================= CONFIG =================
 CLIENT_ID = "1102712380"
 ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJwX2lwIjoiIiwic19pcCI6IiIsImlzcyI6ImRoYW4iLCJwYXJ0bmVySWQiOiIiLCJleHAiOjE3NjYzNDc3ODYsImlhdCI6MTc2NjI2MTM4NiwidG9rZW5Db25zdW1lclR5cGUiOiJTRUxGIiwid2ViaG9va1VybCI6Imh0dHBzOi8vbG9jYWxob3N0IiwiZGhhbkNsaWVudElkIjoiMTEwMjcxMjM4MCJ9.uQ4LyVOZqiy1ZyIENwcBT0Eei8taXbR8KgNW40NV0Y3nR_AQsmAC3JtZSoFE5p2xBwwB3q6ko_JEGTe7x_2ZTA"
-
 
 API_BASE = "https://api.dhan.co/v2"
 
@@ -129,7 +149,6 @@ for strike in selected_strikes:
     rows.append({
         "Strike": int(round(strike)),
 
-        # ----- CE -----
         "CE LTP": round(ce["last_price"], 2) if ce.get("last_price") else None,
         "CE OI": ce.get("oi"),
         "CE Volume": ce.get("volume"),
@@ -142,7 +161,6 @@ for strike in selected_strikes:
         "CE Vega": int(ce["greeks"]["vega"] * 10000)
         if ce.get("greeks", {}).get("vega") is not None else None,
 
-        # ----- PE -----
         "PE LTP": round(pe["last_price"], 2) if pe.get("last_price") else None,
         "PE OI": pe.get("oi"),
         "PE Volume": pe.get("volume"),
@@ -158,9 +176,11 @@ for strike in selected_strikes:
 
 df = pd.DataFrame(rows)
 
-# -------- MAX PAIN -------------------------
+# -------- MAX PAIN + TIMESTAMP + CSV --------
 df = compute_max_pain(df)
 df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+save_to_csv(df, symbol)
+
 true_max_pain_strike = df.loc[df["Max Pain"].idxmin(), "Strike"]
 
 # -------- ATM STRIKES ----------------------
