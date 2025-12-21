@@ -7,21 +7,21 @@ from datetime import datetime, timedelta
 # PAGE CONFIG
 # -------------------------------------------------
 st.set_page_config(layout="wide")
-st.title("📊 NIFTY / BANKNIFTY Max Pain Comparison (Live + Historical)")
+st.title("📊 NIFTY / BANKNIFTY – Max Pain + Greeks Comparison")
 
 # -------------------------------------------------
-# AUTO REFRESH (60s)
+# AUTO REFRESH
 # -------------------------------------------------
 try:
     from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=60 * 1000, key="refresh")
+    st_autorefresh(interval=60_000, key="refresh")
 except Exception:
     pass
 
 # -------------------------------------------------
 # HELPERS
 # -------------------------------------------------
-def ist_now_hhmm():
+def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
 def rotated_time_sort(times, pivot="09:15"):
@@ -31,229 +31,168 @@ def rotated_time_sort(times, pivot="09:15"):
         return ((h * 60 + m) - pivot_min) % (24 * 60)
     return sorted(times, key=key, reverse=True)
 
+FACTOR = 10_000
+
 # -------------------------------------------------
 # CONFIG
 # -------------------------------------------------
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
-    "NIFTY": {"scrip": 13, "seg": "IDX_I"},
-    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I"},
+    "NIFTY": {"scrip": 13, "seg": "IDX_I", "security_id": 256265},
+    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "security_id": 260105},
 }
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2NDQwMzk5LCJpYXQiOjE3NjYzNTM5OTksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.pLY-IzrzCrJIYWLLxo5_FD10k4F1MkgFQB9BOyQm5kIf969v7q0nyxvfyl2NniyhrWDiVWWACAWrW8kxIf3cxA",   # 🔐 move to env var later
+    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2NDQwMzk5LCJpYXQiOjE3NjYzNTM5OTksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.pLY-IzrzCrJIYWLLxo5_FD10k4F1MkgFQB9BOyQm5kIf969v7q0nyxvfyl2NniyhrWDiVWWACAWrW8kxIf3cxA",
     "Content-Type": "application/json",
 }
 
-UNDERLYING = st.sidebar.selectbox("Index", ["NIFTY", "BANKNIFTY"])
+UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
 # -------------------------------------------------
-# LOAD CSV (SAFE)
+# LIVE INDEX PRICE
 # -------------------------------------------------
-try:
-    df = pd.read_csv(CSV_PATH)
-except Exception as e:
-    st.error(f"❌ Cannot read CSV: {e}")
-    st.stop()
+@st.cache_data(ttl=10)
+def get_index_price(security_id):
+    r = requests.post(
+        f"{API_BASE}/marketfeed/ltp",
+        headers=HEADERS,
+        json={"NSE_IDX": [security_id]},
+        timeout=10,
+    )
+    if r.status_code != 200:
+        return None
+    return r.json()["data"].get(str(security_id), {}).get("ltp")
 
-df.columns = df.columns.str.strip()
+price = get_index_price(UNDERLYINGS[UNDERLYING]["security_id"])
+st.sidebar.metric("Live Price", f"{price:.2f}" if price else "N/A")
 
-# ---- detect Strike column
-if "Strike" in df.columns:
-    strike_col = "Strike"
-elif "strike" in df.columns:
-    strike_col = "strike"
-elif "strike_price" in df.columns:
-    strike_col = "strike_price"
-else:
-    st.error("❌ Strike column not found in CSV")
-    st.stop()
-
-# ---- detect Max Pain column
-if "Max Pain" not in df.columns:
-    st.error("❌ 'Max Pain' column not found in CSV")
-    st.stop()
-
-# ---- detect timestamp column
-if "timestamp" not in df.columns:
-    st.error("❌ 'timestamp' column not found in CSV")
-    st.stop()
-
-# ---- normalize
-df.rename(columns={strike_col: "Strike"}, inplace=True)
+# -------------------------------------------------
+# LOAD HISTORICAL CSV
+# -------------------------------------------------
+df = pd.read_csv(CSV_PATH)
 
 df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
 df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
-df = df.dropna(subset=["Strike", "timestamp"])
-
 # -------------------------------------------------
 # TIME SELECTION
 # -------------------------------------------------
-timestamps = rotated_time_sort(df["timestamp"].unique())
-
-if len(timestamps) < 2:
-    st.error("❌ Not enough timestamps in CSV")
-    st.stop()
-
-t1 = st.selectbox("Time-1 (Latest)", timestamps, index=0)
-t2 = st.selectbox("Time-2 (Previous)", timestamps, index=1)
+timestamps = rotated_time_sort(df["timestamp"].dropna().unique())
+t1 = st.selectbox("Time-1 (Latest)", timestamps, 0)
+t2 = st.selectbox("Time-2 (Previous)", timestamps, 1)
 
 # -------------------------------------------------
 # HISTORICAL MAX PAIN
 # -------------------------------------------------
-mp_t1 = (
-    df[df["timestamp"] == t1]
-    .groupby("Strike", as_index=False)["Max Pain"]
-    .sum()
-    .rename(columns={"Max Pain": f"MP ({t1})"})
-)
+mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].sum().rename(f"MP ({t1})")
+mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].sum().rename(f"MP ({t2})")
 
-mp_t2 = (
-    df[df["timestamp"] == t2]
-    .groupby("Strike", as_index=False)["Max Pain"]
-    .sum()
-    .rename(columns={"Max Pain": f"MP ({t2})"})
-)
-
-merged = mp_t1.merge(mp_t2, on="Strike", how="outer")
-merged["△ MP (T1 − T2)"] = merged[f"MP ({t1})"] - merged[f"MP ({t2})"]
+merged = pd.concat([mp_t1, mp_t2], axis=1).reset_index()
+merged["Δ MP (T1 − T2)"] = merged[f"MP ({t1})"] - merged[f"MP ({t2})"]
 
 # -------------------------------------------------
-# LIVE OPTION CHAIN (SAFE)
+# LIVE OPTION CHAIN
 # -------------------------------------------------
 @st.cache_data(ttl=30)
-def fetch_live_chain(symbol):
-    cfg = UNDERLYINGS[symbol]
+def fetch_live_chain():
+    cfg = UNDERLYINGS[UNDERLYING]
 
-    try:
-        r = requests.post(
-            f"{API_BASE}/optionchain/expirylist",
-            headers=HEADERS,
-            json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
-            timeout=10,
-        )
-        if r.status_code != 200:
-            return None
-
-        expiries = r.json().get("data", [])
-        if not expiries:
-            return None
-
-        expiry = expiries[0]
-
-        r = requests.post(
-            f"{API_BASE}/optionchain",
-            headers=HEADERS,
-            json={
-                "UnderlyingScrip": cfg["scrip"],
-                "UnderlyingSeg": cfg["seg"],
-                "Expiry": expiry,
-            },
-            timeout=10,
-        )
-        if r.status_code != 200:
-            return None
-
-        return r.json().get("data")
-
-    except Exception:
+    r = requests.post(
+        f"{API_BASE}/optionchain/expirylist",
+        headers=HEADERS,
+        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
+    )
+    expiries = r.json().get("data", [])
+    if not expiries:
         return None
 
-# -------------------------------------------------
-# LIVE MAX PAIN
-# -------------------------------------------------
-def compute_live_max_pain(oc):
-    rows = []
+    expiry = expiries[0]
 
+    r = requests.post(
+        f"{API_BASE}/optionchain",
+        headers=HEADERS,
+        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"], "Expiry": expiry},
+    )
+    return r.json().get("data", {}).get("oc")
+
+oc = fetch_live_chain()
+
+# -------------------------------------------------
+# LIVE MAX PAIN + GREEKS
+# -------------------------------------------------
+if oc:
+    rows = []
     for strike, v in oc.items():
-        ce = v.get("ce", {})
-        pe = v.get("pe", {})
+        ce, pe = v.get("ce", {}), v.get("pe", {})
         rows.append({
             "Strike": float(strike),
             "CE LTP": ce.get("last_price", 0),
             "CE OI": ce.get("oi", 0),
             "PE LTP": pe.get("last_price", 0),
             "PE OI": pe.get("oi", 0),
+
+            "CE IV L": ce.get("implied_volatility"),
+            "CE Delta L": ce.get("greeks", {}).get("delta"),
+            "CE Gamma L": ce.get("greeks", {}).get("gamma"),
+            "CE Vega L": ce.get("greeks", {}).get("vega"),
+
+            "PE IV L": pe.get("implied_volatility"),
+            "PE Delta L": pe.get("greeks", {}).get("delta"),
+            "PE Gamma L": pe.get("greeks", {}).get("gamma"),
+            "PE Vega L": pe.get("greeks", {}).get("vega"),
         })
 
-    df_live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+    live = pd.DataFrame(rows).sort_values("Strike")
 
-    A = df_live["CE LTP"].values
-    B = df_live["CE OI"].values
-    G = df_live["Strike"].values
-    L = df_live["PE OI"].values
-    M = df_live["PE LTP"].values
+    A, B = live["CE LTP"], live["CE OI"]
+    G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
-    df_live["MP_live"] = [
+    live["MP_live"] = [
         round(
             (
                 -sum(A[i:] * B[i:])
-                + G[i] * sum(B[:i])
+                + G.iloc[i] * sum(B[:i])
                 - sum(G[:i] * B[:i])
                 - sum(M[:i] * L[:i])
                 + sum(G[i:] * L[i:])
-                - G[i] * sum(L[i:])
+                - G.iloc[i] * sum(L[i:])
             ) / 10000
         )
-        for i in range(len(df_live))
+        for i in range(len(live))
     ]
 
-    return df_live[["Strike", "MP_live"]]
+    now = ist_hhmm()
+    merged = merged.merge(live[["Strike", "MP_live"]], on="Strike", how="left")
+    merged.rename(columns={"MP_live": f"MP ({now})"}, inplace=True)
+    merged[f"Δ MP (Live − {t1})"] = merged[f"MP ({now})"] - merged[f"MP ({t1})"]
+
+    # -------------------------------------------------
+    # GREEKS & IV Δ (Live − T1)
+    # -------------------------------------------------
+    base = df[df["timestamp"] == t1].groupby("Strike").mean().reset_index()
+
+    for side in ["CE", "PE"]:
+        for col in ["IV", "Delta", "Gamma", "Vega"]:
+            merged[f"{side} {col} Δ"] = (
+                (live[f"{side} {col} L"] - base[f"{side} {col}"]) * FACTOR
+            )
 
 # -------------------------------------------------
-# MERGE LIVE MP
+# FINAL DISPLAY
 # -------------------------------------------------
-live_data = fetch_live_chain(UNDERLYING)
-
-if live_data is not None and "oc" in live_data:
-    now_ts = ist_now_hhmm()
-    live_mp = compute_live_max_pain(live_data["oc"])
-
-    merged = merged.merge(
-        live_mp.rename(columns={"MP_live": f"MP ({now_ts})"}),
-        on="Strike",
-        how="left",
-    )
-
-    merged[f"△ MP (Live − {t1})"] = (
-        merged[f"MP ({now_ts})"] - merged[f"MP ({t1})"]
-    )
-else:
-    st.warning("⚠️ Live option chain unavailable")
-
-# -------------------------------------------------
-# FINAL TABLE
-# -------------------------------------------------
-final_cols = ["Strike"]
-
-if live_data is not None and "oc" in live_data:
-    final_cols += [f"MP ({now_ts})", f"MP ({t1})", f"△ MP (Live − {t1})"]
-
-final_cols += [f"MP ({t2})", "△ MP (T1 − T2)"]
-
-final = merged[final_cols].sort_values("Strike").round(0)
-
-# -------------------------------------------------
-# DISPLAY
-# -------------------------------------------------
-st.subheader(f"{UNDERLYING} — Max Pain Comparison")
+merged = merged.sort_values("Strike").round(0)
 
 st.dataframe(
-    final,
+    merged,
     use_container_width=True,
-    height=700,
-    column_config={
-        "Strike": st.column_config.NumberColumn("Strike", pinned=True),
-        **{
-            c: st.column_config.NumberColumn(c, pinned=True)
-            for c in final.columns if "MP (" in c
-        },
-    },
+    height=750,
 )
 
-st.caption("MP = Max Pain | Live MP from Dhan | Time in IST")
+st.caption(
+    "MP = Max Pain | Δ = Live − Time-1 | Greeks & IV scaled ×10000 | Live price shown in sidebar"
+)
