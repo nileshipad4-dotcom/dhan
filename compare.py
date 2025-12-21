@@ -175,7 +175,7 @@ if oc:
             + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
             - sum(M[:i] * L[:i])
             + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        ) / 10000 / 100
+        ) / 10000 / 100)
         for i in range(len(live_df))
     ]
 
