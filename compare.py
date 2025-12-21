@@ -43,7 +43,7 @@ UNDERLYINGS = {
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2NDQwMzk5LCJpYXQiOjE3NjYzNTM5OTksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.pLY-IzrzCrJIYWLLxo5_FD10k4F1MkgFQB9BOyQm5kIf969v7q0nyxvfyl2NniyhrWDiVWWACAWrW8kxIf3cxA",   # use env var in production
+    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2NDQwMzk5LCJpYXQiOjE3NjYzNTM5OTksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.pLY-IzrzCrJIYWLLxo5_FD10k4F1MkgFQB9BOyQm5kIf969v7q0nyxvfyl2NniyhrWDiVWWACAWrW8kxIf3cxA",   # 🔐 move to env var later
     "Content-Type": "application/json",
 }
 
@@ -51,18 +51,54 @@ UNDERLYING = st.sidebar.selectbox("Index", ["NIFTY", "BANKNIFTY"])
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
 # -------------------------------------------------
-# LOAD HISTORICAL CSV
+# LOAD CSV (SAFE)
 # -------------------------------------------------
-df = pd.read_csv(CSV_PATH)
+try:
+    df = pd.read_csv(CSV_PATH)
+except Exception as e:
+    st.error(f"❌ Cannot read CSV: {e}")
+    st.stop()
+
+df.columns = df.columns.str.strip()
+
+# ---- detect Strike column
+if "Strike" in df.columns:
+    strike_col = "Strike"
+elif "strike" in df.columns:
+    strike_col = "strike"
+elif "strike_price" in df.columns:
+    strike_col = "strike_price"
+else:
+    st.error("❌ Strike column not found in CSV")
+    st.stop()
+
+# ---- detect Max Pain column
+if "Max Pain" not in df.columns:
+    st.error("❌ 'Max Pain' column not found in CSV")
+    st.stop()
+
+# ---- detect timestamp column
+if "timestamp" not in df.columns:
+    st.error("❌ 'timestamp' column not found in CSV")
+    st.stop()
+
+# ---- normalize
+df.rename(columns={strike_col: "Strike"}, inplace=True)
 
 df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
 df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
+df = df.dropna(subset=["Strike", "timestamp"])
+
 # -------------------------------------------------
 # TIME SELECTION
 # -------------------------------------------------
-timestamps = rotated_time_sort(df["timestamp"].dropna().unique())
+timestamps = rotated_time_sort(df["timestamp"].unique())
+
+if len(timestamps) < 2:
+    st.error("❌ Not enough timestamps in CSV")
+    st.stop()
 
 t1 = st.selectbox("Time-1 (Latest)", timestamps, index=0)
 t2 = st.selectbox("Time-2 (Previous)", timestamps, index=1)
@@ -133,6 +169,7 @@ def fetch_live_chain(symbol):
 # -------------------------------------------------
 def compute_live_max_pain(oc):
     rows = []
+
     for strike, v in oc.items():
         ce = v.get("ce", {})
         pe = v.get("pe", {})
@@ -173,10 +210,9 @@ def compute_live_max_pain(oc):
 # -------------------------------------------------
 live_data = fetch_live_chain(UNDERLYING)
 
-if live_data is not None:
+if live_data is not None and "oc" in live_data:
     now_ts = ist_now_hhmm()
     live_mp = compute_live_max_pain(live_data["oc"])
-
 
     merged = merged.merge(
         live_mp.rename(columns={"MP_live": f"MP ({now_ts})"}),
@@ -188,7 +224,7 @@ if live_data is not None:
         merged[f"MP ({now_ts})"] - merged[f"MP ({t1})"]
     )
 else:
-    st.warning("⚠️ Live option chain unavailable (API / token / market hours)")
+    st.warning("⚠️ Live option chain unavailable")
 
 # -------------------------------------------------
 # FINAL TABLE
@@ -220,4 +256,4 @@ st.dataframe(
     },
 )
 
-st.caption("MP = Max Pain | Live MP computed from real-time Dhan option chain")
+st.caption("MP = Max Pain | Live MP from Dhan | Time in IST")
