@@ -174,7 +174,11 @@ if oc:
     # -------------------------------------------------
     # GREEKS & IV Δ (Live − T1)
     # -------------------------------------------------
-    base = df[df["timestamp"] == t1].groupby("Strike").mean().reset_index()
+    base = (
+    df[df["timestamp"] == t1]
+    .groupby("Strike", as_index=False)
+    .mean(numeric_only=True)
+    )
 
     for side in ["CE", "PE"]:
         for col in ["IV", "Delta", "Gamma", "Vega"]:
