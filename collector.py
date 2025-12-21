@@ -24,7 +24,6 @@ HEADERS = {
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-
 # ================= API =================
 def get_expiries(scrip, seg):
     r = requests.post(
@@ -46,8 +45,11 @@ def get_option_chain(scrip, seg, expiry):
 
 # ================= MAX PAIN =================
 def compute_max_pain(df):
-    A, B = df["CE LTP"].fillna(0), df["CE OI"].fillna(0)
-    G, L, M = df["Strike"], df["PE OI"].fillna(0), df["PE LTP"].fillna(0)
+    A = df["CE LTP"].fillna(0)
+    B = df["CE OI"].fillna(0)
+    G = df["Strike"]
+    L = df["PE OI"].fillna(0)
+    M = df["PE LTP"].fillna(0)
 
     mp = []
     for i in range(len(df)):
@@ -57,15 +59,18 @@ def compute_max_pain(df):
             - sum(M[:i] * L[:i])
             + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
         ) / 10000))
+
     df["Max Pain"] = mp
     return df
 
 
 # ================= MAIN =================
 def main():
+
     ts = (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M")
 
     for sym, cfg in UNDERLYINGS.items():
+
         expiries = get_expiries(cfg["scrip"], cfg["seg"])
         if not expiries:
             continue
@@ -75,6 +80,9 @@ def main():
             continue
 
         oc = data.get("oc", {})
+        if not oc:
+            continue
+
         strikes = sorted(float(s) for s in oc.keys())
 
         center = cfg["center"]
@@ -89,23 +97,57 @@ def main():
 
             rows.append({
                 "Strike": int(s),
+
                 "CE LTP": ce.get("last_price"),
                 "CE OI": ce.get("oi"),
                 "CE IV": ce.get("implied_volatility"),
                 "CE Delta": ce.get("greeks", {}).get("delta"),
                 "CE Gamma": ce.get("greeks", {}).get("gamma"),
                 "CE Vega": ce.get("greeks", {}).get("vega"),
+
                 "PE LTP": pe.get("last_price"),
                 "PE OI": pe.get("oi"),
                 "PE IV": pe.get("implied_volatility"),
                 "PE Delta": pe.get("greeks", {}).get("delta"),
                 "PE Gamma": pe.get("greeks", {}).get("gamma"),
                 "PE Vega": pe.get("greeks", {}).get("vega"),
+
                 "timestamp": ts,
             })
 
-        df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+        if not rows:
+            continue
+
+        df = (
+            pd.DataFrame(rows)
+            .sort_values("Strike")
+            .reset_index(drop=True)
+        )
+
+        # ================= IMPORTANT FIX 1 =================
+        # FORCE NUMERIC (prevents silent MP / Greek errors)
+        num_cols = [
+            "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
+            "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega"
+        ]
+        for c in num_cols:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+
+        # ================= MAX PAIN =================
         df = compute_max_pain(df)
+
+        # ================= IMPORTANT FIX 2 =================
+        # COLUMN ORDER LOCK (guarantees compare.py stability)
+        df = df[
+            [
+                "Strike",
+                "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
+                "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega",
+                "timestamp",
+                "Max Pain",
+            ]
+        ]
 
         out = f"{DATA_DIR}/{sym.lower()}.csv"
         df.to_csv(out, mode="a", header=not os.path.exists(out), index=False)
@@ -115,4 +157,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
