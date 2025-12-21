@@ -160,6 +160,7 @@ df = pd.DataFrame(rows)
 
 # -------- MAX PAIN -------------------------
 df = compute_max_pain(df)
+df["timestamp"] = datetime.now()
 true_max_pain_strike = df.loc[df["Max Pain"].idxmin(), "Strike"]
 
 # -------- ATM STRIKES ----------------------
