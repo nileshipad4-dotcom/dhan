@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 # PAGE CONFIG
 # =================================================
 st.set_page_config(layout="wide")
-st.title("📊 NIFTY / BANKNIFTY – Max Pain Comparison")
+st.title("📊 NIFTY / BANKNIFTY – Max Pain + Greeks Δ")
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -23,6 +23,8 @@ def ist_hhmm():
 
 def rotated_time_sort(times):
     return sorted(times, reverse=True)
+
+FACTOR = 10000
 
 # =================================================
 # CONFIG
@@ -49,7 +51,6 @@ CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 df = pd.read_csv(CSV_PATH)
 
 df["Strike"] = df["Strike"].astype(int)
-df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
 # =================================================
@@ -60,40 +61,52 @@ all_strikes = sorted(df["Strike"].unique())
 
 below = [s for s in all_strikes if s <= center][-25:]
 above = [s for s in all_strikes if s > center][:26]
-SELECTED_STRIKES = set(below + above)
+SELECTED = set(below + above)
 
-df = df[df["Strike"].isin(SELECTED_STRIKES)]
+df = df[df["Strike"].isin(SELECTED)]
 
 # =================================================
 # TIME SELECTION
 # =================================================
-timestamps = rotated_time_sort(df["timestamp"].dropna().unique())
-
+timestamps = rotated_time_sort(df["timestamp"].unique())
 t1 = st.selectbox("Time-1 (Latest)", timestamps, 0)
 t2 = st.selectbox("Time-2 (Previous)", timestamps, 1)
 
 # =================================================
 # HISTORICAL MAX PAIN
 # =================================================
-mp_t1 = (
-    df[df["timestamp"] == t1]
-    .groupby("Strike", as_index=False)["Max Pain"]
-    .mean()
-    .rename(columns={"Max Pain": f"MP ({t1})"})
-)
+mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean()
+mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean()
 
-mp_t2 = (
-    df[df["timestamp"] == t2]
-    .groupby("Strike", as_index=False)["Max Pain"]
-    .mean()
-    .rename(columns={"Max Pain": f"MP ({t2})"})
-)
+final = pd.DataFrame({
+    f"MP ({t1})": mp_t1,
+    f"MP ({t2})": mp_t2,
+}).reset_index()
 
-final = mp_t1.merge(mp_t2, on="Strike", how="inner")
 final[f"Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
 # =================================================
-# LIVE OPTION CHAIN (SAFE)
+# T1 GREEKS / IV BASE
+# =================================================
+t1_base = (
+    df[df["timestamp"] == t1]
+    .groupby("Strike", as_index=False)
+    .agg(
+        CE_IV_T1=("CE IV", "mean"),
+        CE_Delta_T1=("CE Delta", "mean"),
+        CE_Gamma_T1=("CE Gamma", "mean"),
+        CE_Vega_T1=("CE Vega", "mean"),
+        PE_IV_T1=("PE IV", "mean"),
+        PE_Delta_T1=("PE Delta", "mean"),
+        PE_Gamma_T1=("PE Gamma", "mean"),
+        PE_Vega_T1=("PE Vega", "mean"),
+    )
+)
+
+final = final.merge(t1_base, on="Strike", how="inner")
+
+# =================================================
+# LIVE OPTION CHAIN
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc():
@@ -120,9 +133,9 @@ def fetch_live_oc():
     return r.json().get("data", {}).get("oc")
 
 # =================================================
-# LIVE MAX PAIN (IDENTICAL FORMULA)
+# LIVE SNAPSHOT + LIVE MAX PAIN
 # =================================================
-def compute_live_max_pain(oc, strikes):
+def compute_live_snapshot(oc, strikes):
     rows = []
 
     for s in strikes:
@@ -131,10 +144,21 @@ def compute_live_max_pain(oc, strikes):
 
         rows.append({
             "Strike": int(s),
+
             "CE LTP": ce.get("last_price", 0),
             "CE OI": ce.get("oi", 0),
             "PE LTP": pe.get("last_price", 0),
             "PE OI": pe.get("oi", 0),
+
+            "CE IV L": ce.get("implied_volatility"),
+            "CE Delta L": ce.get("greeks", {}).get("delta"),
+            "CE Gamma L": ce.get("greeks", {}).get("gamma"),
+            "CE Vega L": ce.get("greeks", {}).get("vega"),
+
+            "PE IV L": pe.get("implied_volatility"),
+            "PE Delta L": pe.get("greeks", {}).get("delta"),
+            "PE Gamma L": pe.get("greeks", {}).get("gamma"),
+            "PE Vega L": pe.get("greeks", {}).get("vega"),
         })
 
     df_live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
@@ -152,36 +176,55 @@ def compute_live_max_pain(oc, strikes):
         for i in range(len(df_live))
     ]
 
-    return df_live[["Strike", "MP_live"]]
+    return df_live
 
 # =================================================
-# MERGE LIVE MP
+# MERGE LIVE DATA
 # =================================================
 oc = fetch_live_oc()
 
 if oc:
-    live_mp = compute_live_max_pain(oc, SELECTED_STRIKES)
+    live_df = compute_live_snapshot(oc, SELECTED)
     now = ist_hhmm()
 
     final = final.merge(
-        live_mp.rename(columns={"MP_live": f"MP ({now})"}),
+        live_df[[
+            "Strike","MP_live",
+            "CE IV L","CE Delta L","CE Gamma L","CE Vega L",
+            "PE IV L","PE Delta L","PE Gamma L","PE Vega L",
+        ]],
         on="Strike",
         how="inner",
     )
 
-    final[f"Δ MP (Live − {t1})"] = (
-        final[f"MP ({now})"] - final[f"MP ({t1})"]
-    )
+    final[f"MP ({now})"] = final["MP_live"]
+    final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
+
+    final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"])    * FACTOR
+    final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
+    final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
+    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"])  * FACTOR
+
+    final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"])    * FACTOR
+    final["PE Delta Δ"] = (final["PE Delta L"] - final["PE_Delta_T1"]) * FACTOR
+    final["PE Gamma Δ"] = (final["PE Gamma L"] - final["PE_Gamma_T1"]) * FACTOR
+    final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"])  * FACTOR
 
 # =================================================
 # FINAL VIEW
 # =================================================
-cols = ["Strike"]
-
-if oc:
-    cols += [f"MP ({now})", f"MP ({t1})", f"Δ MP (Live − {t1})"]
-
-cols += [f"MP ({t2})", f"Δ MP (T1 − T2)"]
+cols = [
+    "Strike",
+    f"MP ({now})",
+    f"MP ({t1})",
+    f"Δ MP (Live − {t1})",
+    f"MP ({t2})",
+    f"Δ MP (T1 − T2)",
+    "CE IV Δ","PE IV Δ",
+    "CE Delta Δ","PE Delta Δ",
+    "CE Gamma Δ","PE Gamma Δ",
+    "CE Vega Δ","PE Vega Δ",
+]
 
 final = final[cols].sort_values("Strike").round(0)
 
@@ -189,5 +232,5 @@ st.dataframe(final, use_container_width=True, height=750)
 
 st.caption(
     "Strike set identical to collector | 25 below + 26 above | "
-    "Δ = difference | Max Pain math fully aligned"
+    "Δ = Live − T1 | IV & Greeks ×10000"
 )
