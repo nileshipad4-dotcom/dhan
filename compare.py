@@ -21,9 +21,6 @@ except Exception:
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
-def rotated_time_sort(times):
-    return sorted(times, reverse=True)
-
 FACTOR = 10000
 
 # =================================================
@@ -45,32 +42,33 @@ UNDERLYINGS = {
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
+CENTER = UNDERLYINGS[UNDERLYING]["center"]
+
 # =================================================
 # LOAD CSV (HISTORICAL)
 # =================================================
 df = pd.read_csv(CSV_PATH)
 
-df["Strike"] = df["Strike"].astype(int)
+df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce").astype(int)
+df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
 # =================================================
-# IDENTICAL STRIKE SELECTION (MATCHES COLLECTOR)
+# STRIKE WINDOW (IDENTICAL TO COLLECTOR)
 # =================================================
-center = UNDERLYINGS[UNDERLYING]["center"]
 all_strikes = sorted(df["Strike"].unique())
+below = [s for s in all_strikes if s <= CENTER][-25:]
+above = [s for s in all_strikes if s > CENTER][:26]
+STRIKES = set(below + above)
 
-below = [s for s in all_strikes if s <= center][-25:]
-above = [s for s in all_strikes if s > center][:26]
-SELECTED = set(below + above)
-
-df = df[df["Strike"].isin(SELECTED)]
+df = df[df["Strike"].isin(STRIKES)]
 
 # =================================================
 # TIME SELECTION
 # =================================================
-timestamps = rotated_time_sort(df["timestamp"].unique())
-t1 = st.selectbox("Time-1 (Latest)", timestamps, 0)
-t2 = st.selectbox("Time-2 (Previous)", timestamps, 1)
+times = sorted(df["timestamp"].unique(), reverse=True)
+t1 = st.selectbox("Time-1 (Latest)", times, 0)
+t2 = st.selectbox("Time-2 (Previous)", times, 1)
 
 # =================================================
 # HISTORICAL MAX PAIN
@@ -83,24 +81,25 @@ final = pd.DataFrame({
     f"MP ({t2})": mp_t2,
 }).reset_index()
 
-final[f"Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
+final["Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
 # =================================================
-# T1 GREEKS / IV BASE
+# T1 BASE (IV + GREEKS)
 # =================================================
 t1_base = (
     df[df["timestamp"] == t1]
     .groupby("Strike", as_index=False)
-    .agg(
-        CE_IV_T1=("CE IV", "mean"),
-        CE_Delta_T1=("CE Delta", "mean"),
-        CE_Gamma_T1=("CE Gamma", "mean"),
-        CE_Vega_T1=("CE Vega", "mean"),
-        PE_IV_T1=("PE IV", "mean"),
-        PE_Delta_T1=("PE Delta", "mean"),
-        PE_Gamma_T1=("PE Gamma", "mean"),
-        PE_Vega_T1=("PE Vega", "mean"),
-    )
+    .mean(numeric_only=True)
+    .rename(columns={
+        "CE IV": "CE_IV_T1",
+        "CE Delta": "CE_Delta_T1",
+        "CE Gamma": "CE_Gamma_T1",
+        "CE Vega": "CE_Vega_T1",
+        "PE IV": "PE_IV_T1",
+        "PE Delta": "PE_Delta_T1",
+        "PE Gamma": "PE_Gamma_T1",
+        "PE Vega": "PE_Vega_T1",
+    })
 )
 
 final = final.merge(t1_base, on="Strike", how="inner")
@@ -135,16 +134,17 @@ def fetch_live_oc():
 # =================================================
 # LIVE SNAPSHOT + LIVE MAX PAIN
 # =================================================
-def compute_live_snapshot(oc, strikes):
-    rows = []
+oc = fetch_live_oc()
+now = ist_hhmm()
 
-    for s in strikes:
+if oc:
+    rows = []
+    for s in STRIKES:
         v = oc.get(f"{float(s):.6f}", {})
         ce, pe = v.get("ce", {}), v.get("pe", {})
 
         rows.append({
-            "Strike": int(s),
-
+            "Strike": s,
             "CE LTP": ce.get("last_price", 0),
             "CE OI": ce.get("oi", 0),
             "PE LTP": pe.get("last_price", 0),
@@ -161,53 +161,38 @@ def compute_live_snapshot(oc, strikes):
             "PE Vega L": pe.get("greeks", {}).get("vega"),
         })
 
-    df_live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+    live_df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    A, B = df_live["CE LTP"], df_live["CE OI"]
-    G, L, M = df_live["Strike"], df_live["PE OI"], df_live["PE LTP"]
+    # ---- LIVE MAX PAIN (MATCHES COLLECTOR) ----
+    A, B = live_df["CE LTP"], live_df["CE OI"]
+    G, L, M = live_df["Strike"], live_df["PE OI"], live_df["PE LTP"]
 
-    df_live["MP_live"] = [
+    live_df["MP_live"] = [
         int((
             -sum(A[i:] * B[i:])
             + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
             - sum(M[:i] * L[:i])
             + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
         ) / 10000)
-        for i in range(len(df_live))
+        for i in range(len(live_df))
     ]
 
-    return df_live
-
-# =================================================
-# MERGE LIVE DATA
-# =================================================
-oc = fetch_live_oc()
-
-if oc:
-    live_df = compute_live_snapshot(oc, SELECTED)
-    now = ist_hhmm()
-
-    final = final.merge(
-        live_df[[
-            "Strike","MP_live",
-            "CE IV L","CE Delta L","CE Gamma L","CE Vega L",
-            "PE IV L","PE Delta L","PE Gamma L","PE Vega L",
-        ]],
-        on="Strike",
-        how="inner",
-    )
+    final = final.merge(live_df, on="Strike", how="inner")
 
     final[f"MP ({now})"] = final["MP_live"]
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
 
-    final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"])    * FACTOR
-    final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
-    final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
-    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"])  * FACTOR
+    # ΔΔ MP (slope)
+    final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"] - final[f"Δ MP (Live − {t1})"].shift(1)
 
+    # IV + GREEKS Δ
+    final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"])    * FACTOR
     final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"])    * FACTOR
-    final["PE Delta Δ"] = (final["PE Delta L"] - final["PE_Delta_T1"]) * FACTOR
+    final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
     final["PE Gamma Δ"] = (final["PE Gamma L"] - final["PE_Gamma_T1"]) * FACTOR
+    final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
+    final["PE Delta Δ"] = (final["PE Delta L"] - final["PE_Delta_T1"]) * FACTOR
+    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"])  * FACTOR
     final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"])  * FACTOR
 
 # =================================================
@@ -218,19 +203,45 @@ cols = [
     f"MP ({now})",
     f"MP ({t1})",
     f"Δ MP (Live − {t1})",
+    "ΔΔ MP",
     f"MP ({t2})",
-    f"Δ MP (T1 − T2)",
+    "Δ MP (T1 − T2)",
     "CE IV Δ","PE IV Δ",
-    "CE Delta Δ","PE Delta Δ",
     "CE Gamma Δ","PE Gamma Δ",
+    "CE Delta Δ","PE Delta Δ",
     "CE Vega Δ","PE Vega Δ",
 ]
 
-final = final[cols].sort_values("Strike").round(0)
+final = final[cols].round(0)
 
-st.dataframe(final, use_container_width=True, height=750)
+# =================================================
+# STYLING
+# =================================================
+min_mp_strike = final.loc[final[f"MP ({now})"].idxmin(), "Strike"]
+
+def highlight(row):
+    styles = []
+    for col in final.columns:
+        if row["Strike"] == min_mp_strike:
+            styles.append("background-color:#8B0000;color:white")
+        else:
+            styles.append("")
+    return styles
+
+styled = final.style.apply(highlight, axis=1)
+
+st.dataframe(
+    styled,
+    use_container_width=True,
+    height=750,
+    column_config={
+        c: st.column_config.NumberColumn(c, pinned=True)
+        for c in final.columns[:5]  # freeze till ΔΔ MP
+    },
+)
 
 st.caption(
-    "Strike set identical to collector | 25 below + 26 above | "
-    "Δ = Live − T1 | IV & Greeks ×10000"
+    "Strike window identical to collector | "
+    "Δ = Live − T1 | IV & Greeks ×10000 | "
+    "Red row = Minimum Live Max Pain"
 )
