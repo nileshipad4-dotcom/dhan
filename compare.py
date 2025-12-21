@@ -75,8 +75,8 @@ t2 = st.selectbox("Time-2 (Previous)", times, 1)
 # =================================================
 # HISTORICAL MAX PAIN
 # =================================================
-mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
-mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
+mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 10
+mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 10
 
 final = pd.DataFrame({
     f"MP ({t1})": mp_t1,
@@ -175,7 +175,7 @@ if oc:
             + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
             - sum(M[:i] * L[:i])
             + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        ) / 10000 / 100)
+        ) / 10000 / 10)
         for i in range(len(live_df))
     ]
 
