@@ -1,6 +1,5 @@
 
 
-
 import streamlit as st
 import requests
 import pandas as pd
@@ -10,6 +9,7 @@ from datetime import datetime
 # ================= CONFIG =================
 CLIENT_ID = "1102712380"
 ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJwX2lwIjoiIiwic19pcCI6IiIsImlzcyI6ImRoYW4iLCJwYXJ0bmVySWQiOiIiLCJleHAiOjE3NjYzNDc3ODYsImlhdCI6MTc2NjI2MTM4NiwidG9rZW5Db25zdW1lclR5cGUiOiJTRUxGIiwid2ViaG9va1VybCI6Imh0dHBzOi8vbG9jYWxob3N0IiwiZGhhbkNsaWVudElkIjoiMTEwMjcxMjM4MCJ9.uQ4LyVOZqiy1ZyIENwcBT0Eei8taXbR8KgNW40NV0Y3nR_AQsmAC3JtZSoFE5p2xBwwB3q6ko_JEGTe7x_2ZTA"
+
 
 API_BASE = "https://api.dhan.co/v2"
 
@@ -77,7 +77,7 @@ def compute_max_pain(df):
         R = G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
         S = -sum(M[:i] * L[:i])
         T = sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        U.append(int((Q + R + S + T) / 1000000))
+        U.append(int((Q + R + S + T) / 10000))
 
     df["Max Pain"] = U
     return df
@@ -111,6 +111,7 @@ if not data:
 oc = data["oc"]
 strikes = sorted(float(k) for k in oc.keys())
 
+# -------- CENTER STRIKE --------------------
 if index_ltp is not None:
     center = min(strikes, key=lambda x: abs(x - index_ltp))
 else:
@@ -128,13 +129,31 @@ for strike in selected_strikes:
     rows.append({
         "Strike": int(round(strike)),
 
+        # ----- CE -----
         "CE LTP": round(ce["last_price"], 2) if ce.get("last_price") else None,
         "CE OI": ce.get("oi"),
         "CE Volume": ce.get("volume"),
+        "CE IV": int(ce["implied_volatility"] * 10000)
+        if ce.get("implied_volatility") is not None else None,
+        "CE Delta": int(ce["greeks"]["delta"] * 100000)
+        if ce.get("greeks", {}).get("delta") is not None else None,
+        "CE Gamma": int(ce["greeks"]["gamma"] * 10000000)
+        if ce.get("greeks", {}).get("gamma") is not None else None,
+        "CE Vega": int(ce["greeks"]["vega"] * 10000)
+        if ce.get("greeks", {}).get("vega") is not None else None,
 
+        # ----- PE -----
         "PE LTP": round(pe["last_price"], 2) if pe.get("last_price") else None,
         "PE OI": pe.get("oi"),
         "PE Volume": pe.get("volume"),
+        "PE IV": int(pe["implied_volatility"] * 10000)
+        if pe.get("implied_volatility") is not None else None,
+        "PE Delta": int(pe["greeks"]["delta"] * 100000)
+        if pe.get("greeks", {}).get("delta") is not None else None,
+        "PE Gamma": int(pe["greeks"]["gamma"] * 10000000)
+        if pe.get("greeks", {}).get("gamma") is not None else None,
+        "PE Vega": int(pe["greeks"]["vega"] * 10000)
+        if pe.get("greeks", {}).get("vega") is not None else None,
     })
 
 df = pd.DataFrame(rows)
@@ -144,8 +163,11 @@ df = compute_max_pain(df)
 true_max_pain_strike = df.loc[df["Max Pain"].idxmin(), "Strike"]
 
 # -------- ATM STRIKES ----------------------
-lower = max(df["Strike"][df["Strike"] <= index_ltp], default=None)
-upper = min(df["Strike"][df["Strike"] >= index_ltp], default=None)
+if index_ltp is not None:
+    lower = max(df["Strike"][df["Strike"] <= index_ltp], default=None)
+    upper = min(df["Strike"][df["Strike"] >= index_ltp], default=None)
+else:
+    lower = upper = None
 
 def highlight_rows(row):
     if row["Strike"] == true_max_pain_strike:
