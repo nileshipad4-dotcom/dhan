@@ -3,9 +3,9 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 
-# -------------------------------------------------
+# =================================================
 # PAGE CONFIG
-# -------------------------------------------------
+# =================================================
 st.set_page_config(layout="wide")
 st.title("📊 NIFTY / BANKNIFTY – Max Pain + Greeks Comparison")
 
@@ -15,9 +15,9 @@ try:
 except Exception:
     pass
 
-# -------------------------------------------------
+# =================================================
 # HELPERS
-# -------------------------------------------------
+# =================================================
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
@@ -30,9 +30,9 @@ def rotated_time_sort(times, pivot="09:15"):
 
 FACTOR = 10_000
 
-# -------------------------------------------------
+# =================================================
 # CONFIG
-# -------------------------------------------------
+# =================================================
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
@@ -49,9 +49,9 @@ HEADERS = {
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
-# -------------------------------------------------
+# =================================================
 # LIVE INDEX PRICE
-# -------------------------------------------------
+# =================================================
 @st.cache_data(ttl=10)
 def get_index_price(sec_id):
     r = requests.post(
@@ -67,34 +67,43 @@ def get_index_price(sec_id):
 spot = get_index_price(UNDERLYINGS[UNDERLYING]["security_id"])
 st.sidebar.metric("Live Price", f"{spot:.2f}" if spot else "N/A")
 
-# -------------------------------------------------
+# =================================================
 # LOAD HISTORICAL CSV
-# -------------------------------------------------
+# =================================================
 df = pd.read_csv(CSV_PATH)
 
-df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
+# ---- normalize strikes (CRITICAL) ----
+df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce").astype("Int64")
 df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
-# -------------------------------------------------
+# =================================================
 # TIME SELECTION
-# -------------------------------------------------
+# =================================================
 timestamps = rotated_time_sort(df["timestamp"].dropna().unique())
 t1 = st.selectbox("Time-1 (Latest)", timestamps, 0)
 t2 = st.selectbox("Time-2 (Previous)", timestamps, 1)
 
-# -------------------------------------------------
-# HISTORICAL MAX PAIN
-# -------------------------------------------------
-mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].sum().rename(f"MP ({t1})")
-mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].sum().rename(f"MP ({t2})")
+# =================================================
+# HISTORICAL MAX PAIN (T1, T2)
+# =================================================
+mp_t1 = (
+    df[df["timestamp"] == t1]
+    .groupby("Strike", as_index=False)["Max Pain"]
+    .mean()
+    .rename(columns={"Max Pain": f"MP ({t1})"})
+)
 
-merged = pd.concat([mp_t1, mp_t2], axis=1).reset_index()
-merged["Δ MP (T1 − T2)"] = merged[f"MP ({t1})"] - merged[f"MP ({t2})"]
+mp_t2 = (
+    df[df["timestamp"] == t2]
+    .groupby("Strike", as_index=False)["Max Pain"]
+    .mean()
+    .rename(columns={"Max Pain": f"MP ({t2})"})
+)
 
-# -------------------------------------------------
-# T1 GREEKS / IV SNAPSHOT (BY STRIKE)
-# -------------------------------------------------
+# =================================================
+# T1 GREEKS / IV BASE (STRICT)
+# =================================================
 t1_base = (
     df[df["timestamp"] == t1]
     .groupby("Strike", as_index=False)
@@ -110,11 +119,9 @@ t1_base = (
     )
 )
 
-merged = merged.merge(t1_base, on="Strike", how="left")
-
-# -------------------------------------------------
+# =================================================
 # LIVE OPTION CHAIN
-# -------------------------------------------------
+# =================================================
 @st.cache_data(ttl=30)
 def fetch_live_chain():
     cfg = UNDERLYINGS[UNDERLYING]
@@ -133,21 +140,27 @@ def fetch_live_chain():
     r = requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
-        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"], "Expiry": expiry},
+        json={
+            "UnderlyingScrip": cfg["scrip"],
+            "UnderlyingSeg": cfg["seg"],
+            "Expiry": expiry,
+        },
     )
     return r.json().get("data", {}).get("oc")
 
 oc = fetch_live_chain()
 
-# -------------------------------------------------
-# LIVE MAX PAIN + GREEKS
-# -------------------------------------------------
+# =================================================
+# LIVE SNAPSHOT (STRICT STRIKE NORMALIZATION)
+# =================================================
+live_df = None
+
 if oc:
     rows = []
     for strike, v in oc.items():
         ce, pe = v.get("ce", {}), v.get("pe", {})
         rows.append({
-            "Strike": float(strike),
+            "Strike": int(round(float(strike))),
 
             "CE LTP": ce.get("last_price", 0),
             "CE OI": ce.get("oi", 0),
@@ -165,13 +178,15 @@ if oc:
             "PE Vega L": pe.get("greeks", {}).get("vega"),
         })
 
-    live = pd.DataFrame(rows).sort_values("Strike")
+    live_df = pd.DataFrame(rows).dropna(subset=["Strike"])
+    live_df["Strike"] = live_df["Strike"].astype("Int64")
+    live_df = live_df.sort_values("Strike").reset_index(drop=True)
 
     # ---- LIVE MAX PAIN ----
-    A, B = live["CE LTP"], live["CE OI"]
-    G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
+    A, B = live_df["CE LTP"], live_df["CE OI"]
+    G, L, M = live_df["Strike"], live_df["PE OI"], live_df["PE LTP"]
 
-    live["MP_live"] = [
+    live_df["MP_live"] = [
         round(
             (
                 -sum(A[i:] * B[i:])
@@ -182,52 +197,62 @@ if oc:
                 - G.iloc[i] * sum(L[i:])
             ) / 10000
         )
-        for i in range(len(live))
+        for i in range(len(live_df))
     ]
 
-    now = ist_hhmm()
+# =================================================
+# FINAL STRICT MERGE (INNER = ONLY TRUE MATCHES)
+# =================================================
+final = (
+    mp_t1
+    .merge(mp_t2, on="Strike", how="inner")
+    .merge(t1_base, on="Strike", how="inner")
+)
 
-    merged = merged.merge(
-        live[["Strike", "MP_live"]].rename(columns={"MP_live": f"MP ({now})"}),
-        on="Strike",
-        how="left",
-    )
-
-    merged[f"Δ MP (Live − {t1})"] = merged[f"MP ({now})"] - merged[f"MP ({t1})"]
-
-    # ---- MERGE LIVE GREEKS ----
-    merged = merged.merge(
-        live[[
-            "Strike",
+if live_df is not None:
+    final = final.merge(
+        live_df[[
+            "Strike","MP_live",
             "CE IV L","CE Delta L","CE Gamma L","CE Vega L",
             "PE IV L","PE Delta L","PE Gamma L","PE Vega L",
         ]],
         on="Strike",
-        how="left",
+        how="inner",
     )
 
+    now = ist_hhmm()
+
+    final[f"MP ({now})"] = final["MP_live"]
+    final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
+
     # ---- GREEKS / IV DELTAS (CORRECT) ----
-    merged["CE IV Δ"]     = (merged["CE IV L"]     - merged["CE_IV_T1"])     * FACTOR
-    merged["CE Delta Δ"]  = (merged["CE Delta L"]  - merged["CE_Delta_T1"])  * FACTOR
-    merged["CE Gamma Δ"]  = (merged["CE Gamma L"]  - merged["CE_Gamma_T1"])  * FACTOR
-    merged["CE Vega Δ"]   = (merged["CE Vega L"]   - merged["CE_Vega_T1"])   * FACTOR
+    final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"])    * FACTOR
+    final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
+    final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
+    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"])  * FACTOR
 
-    merged["PE IV Δ"]     = (merged["PE IV L"]     - merged["PE_IV_T1"])     * FACTOR
-    merged["PE Delta Δ"]  = (merged["PE Delta L"]  - merged["PE_Delta_T1"])  * FACTOR
-    merged["PE Gamma Δ"]  = (merged["PE Gamma L"]  - merged["PE_Gamma_T1"])  * FACTOR
-    merged["PE Vega Δ"]   = (merged["PE Vega L"]   - merged["PE_Vega_T1"])   * FACTOR
+    final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"])    * FACTOR
+    final["PE Delta Δ"] = (final["PE Delta L"] - final["PE_Delta_T1"]) * FACTOR
+    final["PE Gamma Δ"] = (final["PE Gamma L"] - final["PE_Gamma_T1"]) * FACTOR
+    final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"])  * FACTOR
 
-# -------------------------------------------------
-# FINAL DISPLAY
-# -------------------------------------------------
-final = merged.sort_values("Strike").round(0)
+# =================================================
+# FINAL VIEW (ONLY SIGNAL, NO NOISE)
+# =================================================
+final = final[[
+    "Strike",
+    f"MP ({now})",
+    f"MP ({t1})",
+    f"Δ MP (Live − {t1})",
+    f"MP ({t2})",
+    "CE IV Δ","PE IV Δ",
+    "CE Delta Δ","PE Delta Δ",
+    "CE Gamma Δ","PE Gamma Δ",
+    "CE Vega Δ","PE Vega Δ",
+]].round(0)
 
-st.dataframe(
-    final,
-    use_container_width=True,
-    height=750,
-)
+st.dataframe(final, use_container_width=True, height=750)
 
 st.caption(
-    "MP = Max Pain | Δ = Live − Time-1 | Greeks & IV scaled ×10000 | Live price shown in sidebar"
+    "Δ = Live − Time-1 | Greeks & IV ×10000 | Strict strike matching | Live price in sidebar"
 )
