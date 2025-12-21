@@ -88,7 +88,9 @@ def main():
     if not ACCESS_TOKEN:
         raise RuntimeError("DHAN_TOKEN is not set")
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    from datetime import timezone, timedelta
+    timestamp = (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M")
+
 
     for symbol, cfg in UNDERLYINGS.items():
 
