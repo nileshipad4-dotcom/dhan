@@ -45,8 +45,9 @@ STRIKE_CENTER = {
     "BANKNIFTY": 60000,
 }
 
-STRIKE_WINDOW = 25   # strikes above & below
-STRIKE_STEP = 100    # NIFTY / BANKNIFTY step
+STRIKE_STEP = 100
+STRIKES_BELOW = 25
+STRIKES_ABOVE = 26
 
 HEADERS = {
     "client-id": "1102712380",
@@ -58,6 +59,8 @@ UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
 CENTER = STRIKE_CENTER[UNDERLYING]
+LOWER = CENTER - STRIKES_BELOW * STRIKE_STEP
+UPPER = CENTER + STRIKES_ABOVE * STRIKE_STEP
 
 # =================================================
 # LIVE INDEX PRICE
@@ -87,10 +90,7 @@ df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
 # ---- APPLY STRIKE WINDOW (HISTORICAL) ----
-df = df[
-    (df["Strike"] >= CENTER - STRIKE_WINDOW * STRIKE_STEP) &
-    (df["Strike"] <= CENTER + STRIKE_WINDOW * STRIKE_STEP)
-]
+df = df[(df["Strike"] >= LOWER) & (df["Strike"] <= UPPER)]
 
 # =================================================
 # TIME SELECTION
@@ -166,20 +166,20 @@ def fetch_live_chain():
 oc = fetch_live_chain()
 
 # =================================================
-# LIVE SNAPSHOT + LIVE MAX PAIN
+# LIVE SNAPSHOT + LIVE MAX PAIN (WINDOWED)
 # =================================================
 live_df = None
 
 if oc:
     rows = []
     for strike, v in oc.items():
-        strike_i = int(round(float(strike)))
-        if not (CENTER - STRIKE_WINDOW * STRIKE_STEP <= strike_i <= CENTER + STRIKE_WINDOW * STRIKE_STEP):
+        s = int(round(float(strike)))
+        if not (LOWER <= s <= UPPER):
             continue
 
         ce, pe = v.get("ce", {}), v.get("pe", {})
         rows.append({
-            "Strike": strike_i,
+            "Strike": s,
 
             "CE LTP": ce.get("last_price", 0),
             "CE OI": ce.get("oi", 0),
@@ -199,7 +199,7 @@ if oc:
 
     live_df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    # ---- LIVE MAX PAIN (WINDOWED) ----
+    # ---- LIVE MAX PAIN ----
     A, B = live_df["CE LTP"], live_df["CE OI"]
     G, L, M = live_df["Strike"], live_df["PE OI"], live_df["PE LTP"]
 
@@ -243,7 +243,6 @@ if live_df is not None:
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final[f"Δ MP (T1 − {t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
-    # ---- GREEKS / IV DELTAS ----
     final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"])    * FACTOR
     final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
     final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
@@ -273,5 +272,5 @@ final = final[[
 st.dataframe(final, use_container_width=True, height=750)
 
 st.caption(
-    "Strike window ±25 | MP + Greeks | Δ = Live − Time-1 | Greeks ×10000 | Live price in sidebar"
+    "Strike window: 25 below / 26 above | Δ = Live − T1 | Greeks ×10000 | Live price shown"
 )
