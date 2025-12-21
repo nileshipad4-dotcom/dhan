@@ -198,6 +198,13 @@ if oc:
     final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"])  * FACTOR
 
 # =================================================
+# FORCE INTEGER FOR ALL MAX PAIN COLUMNS
+# =================================================
+for c in final.columns:
+    if "MP" in c:   # catches MP(now), MP(t1), MP(t2), Δ MP, ΔΔ MP
+        final[c] = pd.to_numeric(final[c], errors="coerce").fillna(0).astype(int)
+
+# =================================================
 # FINAL VIEW
 # =================================================
 cols = [
