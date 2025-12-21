@@ -1,5 +1,3 @@
-
-
 # collector.py
 import requests
 import pandas as pd
@@ -8,13 +6,21 @@ import os
 
 # ================= CONFIG =================
 CLIENT_ID = "1102712380"
-ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJwX2lwIjoiIiwic19pcCI6IiIsImlzcyI6ImRoYW4iLCJwYXJ0bmVySWQiOiIiLCJleHAiOjE3NjYzNDc3ODYsImlhdCI6MTc2NjI2MTM4NiwidG9rZW5Db25zdW1lclR5cGUiOiJTRUxGIiwid2ViaG9va1VybCI6Imh0dHBzOi8vbG9jYWxob3N0IiwiZGhhbkNsaWVudElkIjoiMTEwMjcxMjM4MCJ9.uQ4LyVOZqiy1ZyIENwcBT0Eei8taXbR8KgNW40NV0Y3nR_AQsmAC3JtZSoFE5p2xBwwB3q6ko_JEGTe7x_2ZTA"
+ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2NDQwMzk5LCJpYXQiOjE3NjYzNTM5OTksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.pLY-IzrzCrJIYWLLxo5_FD10k4F1MkgFQB9BOyQm5kIf969v7q0nyxvfyl2NniyhrWDiVWWACAWrW8kxIf3cxA"
 
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
-    "NIFTY": {"scrip": 13, "seg": "IDX_I"},
-    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I"},
+    "NIFTY": {
+        "scrip": 13,
+        "seg": "IDX_I",
+        "center": 26000,     # 👈 FIXED CENTER
+    },
+    "BANKNIFTY": {
+        "scrip": 25,
+        "seg": "IDX_I",
+        "center": 60000,     # 👈 FIXED CENTER
+    },
 }
 
 HEADERS = {
@@ -98,14 +104,33 @@ def main():
             continue
 
         oc = data.get("oc", {})
+        if not oc:
+            continue
+
+        # -------------------------------------------------
+        # STRIKE FILTERING (25 BELOW + 25 ABOVE FIXED LEVEL)
+        # -------------------------------------------------
+        center = cfg["center"]
+
+        strikes = sorted(float(s) for s in oc.keys())
+
+        below = [s for s in strikes if s <= center][-25:]
+        above = [s for s in strikes if s > center][:25]
+
+        selected_strikes = set(below + above)
+
+        # -------------------------------------------------
+        # BUILD ROWS
+        # -------------------------------------------------
         rows = []
 
-        for strike, v in oc.items():
+        for strike in selected_strikes:
+            v = oc.get(f"{strike:.6f}", {})
             ce = v.get("ce", {})
             pe = v.get("pe", {})
 
             rows.append({
-                "Strike": int(float(strike)),
+                "Strike": int(strike),
 
                 # ---------- CE ----------
                 "CE LTP": ce.get("last_price"),
@@ -133,7 +158,11 @@ def main():
         if not rows:
             continue
 
-        df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+        df = (
+            pd.DataFrame(rows)
+            .sort_values("Strike")
+            .reset_index(drop=True)
+        )
 
         # -------- MAX PAIN --------
         df = compute_max_pain(df)
@@ -152,4 +181,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
