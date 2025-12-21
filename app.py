@@ -122,9 +122,11 @@ for strike in selected_strikes:
     pe = s.get("pe", {})
 
     rows.append({
-        "Strike": strike,
+        "Strike": int(round(strike)),
 
-        "CE LTP": ce.get("last_price"),
+
+       "CE LTP": round(ce["last_price"], 2)
+        if ce.get("last_price") is not None else None,
         "CE OI": ce.get("oi"),
         "CE Volume": ce.get("volume"),
 
@@ -140,7 +142,8 @@ for strike in selected_strikes:
         "CE Vega": int(ce["greeks"]["vega"] * 10000)
         if ce.get("greeks", {}).get("vega") is not None else None,
 
-        "PE LTP": pe.get("last_price"),
+        "PE LTP": round(pe["last_price"], 2)
+        if pe.get("last_price") is not None else None,
         "PE OI": pe.get("oi"),
         "PE Volume": pe.get("volume"),
 
