@@ -199,9 +199,7 @@ if oc:
 
     final[f"MP ({now})"] = final["MP_live"]
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
-    final["ΔΔ MP"] = (final[f"Δ MP (Live − {t1})"] - final[f"Δ MP (Live − {t1})"].shift(1))
 
-    
     final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"])    * FACTOR
     final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
     final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
@@ -220,27 +218,13 @@ cols = [
     f"MP ({now})",
     f"MP ({t1})",
     f"Δ MP (Live − {t1})",
-    "ΔΔ MP",
     f"MP ({t2})",
     f"Δ MP (T1 − T2)",
-
-    # ---- IV ----
-    "CE IV Δ",
-    "PE IV Δ",
-
-    # ---- GAMMA ----
-    "CE Gamma Δ",
-    "PE Gamma Δ",
-
-    # ---- DELTA ----
-    "CE Delta Δ",
-    "PE Delta Δ",
-
-    # ---- VEGA ----
-    "CE Vega Δ",
-    "PE Vega Δ",
+    "CE IV Δ","PE IV Δ",
+    "CE Delta Δ","PE Delta Δ",
+    "CE Gamma Δ","PE Gamma Δ",
+    "CE Vega Δ","PE Vega Δ",
 ]
-
 
 final = final[cols].sort_values("Strike").round(0)
 
@@ -250,4 +234,3 @@ st.caption(
     "Strike set identical to collector | 25 below + 26 above | "
     "Δ = Live − T1 | IV & Greeks ×10000"
 )
-
