@@ -43,7 +43,7 @@ UNDERLYINGS = {
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "YOUR_DHAN_TOKEN",  # use env var in production
+    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2NDQwMzk5LCJpYXQiOjE3NjYzNTM5OTksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.pLY-IzrzCrJIYWLLxo5_FD10k4F1MkgFQB9BOyQm5kIf969v7q0nyxvfyl2NniyhrWDiVWWACAWrW8kxIf3cxA",   # use env var in production
     "Content-Type": "application/json",
 }
 
@@ -88,35 +88,45 @@ merged = mp_t1.merge(mp_t2, on="Strike", how="outer")
 merged["△ MP (T1 − T2)"] = merged[f"MP ({t1})"] - merged[f"MP ({t2})"]
 
 # -------------------------------------------------
-# LIVE OPTION CHAIN (DHAN)
+# LIVE OPTION CHAIN (SAFE)
 # -------------------------------------------------
 @st.cache_data(ttl=30)
 def fetch_live_chain(symbol):
     cfg = UNDERLYINGS[symbol]
 
-    r = requests.post(
-        f"{API_BASE}/optionchain/expirylist",
-        headers=HEADERS,
-        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
-        timeout=10,
-    )
-    expiries = r.json().get("data", [])
-    if not expiries:
+    try:
+        r = requests.post(
+            f"{API_BASE}/optionchain/expirylist",
+            headers=HEADERS,
+            json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+
+        expiries = r.json().get("data", [])
+        if not expiries:
+            return None
+
+        expiry = expiries[0]
+
+        r = requests.post(
+            f"{API_BASE}/optionchain",
+            headers=HEADERS,
+            json={
+                "UnderlyingScrip": cfg["scrip"],
+                "UnderlyingSeg": cfg["seg"],
+                "Expiry": expiry,
+            },
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+
+        return r.json().get("data")
+
+    except Exception:
         return None
-
-    expiry = expiries[0]
-
-    r = requests.post(
-        f"{API_BASE}/optionchain",
-        headers=HEADERS,
-        json={
-            "UnderlyingScrip": cfg["scrip"],
-            "UnderlyingSeg": cfg["seg"],
-            "Expiry": expiry,
-        },
-        timeout=10,
-    )
-    return r.json().get("data")
 
 # -------------------------------------------------
 # LIVE MAX PAIN
@@ -126,7 +136,6 @@ def compute_live_max_pain(oc):
     for strike, v in oc.items():
         ce = v.get("ce", {})
         pe = v.get("pe", {})
-
         rows.append({
             "Strike": float(strike),
             "CE LTP": ce.get("last_price", 0),
@@ -164,7 +173,7 @@ def compute_live_max_pain(oc):
 # -------------------------------------------------
 live_data = fetch_live_chain(UNDERLYING)
 
-if live_data:
+if live_data is not None:
     now_ts = ist_now_hhmm()
     live_mp = compute_live_max_pain(live_data)
 
@@ -177,13 +186,15 @@ if live_data:
     merged[f"△ MP (Live − {t1})"] = (
         merged[f"MP ({now_ts})"] - merged[f"MP ({t1})"]
     )
+else:
+    st.warning("⚠️ Live option chain unavailable (API / token / market hours)")
 
 # -------------------------------------------------
 # FINAL TABLE
 # -------------------------------------------------
 final_cols = ["Strike"]
 
-if live_data:
+if live_data is not None:
     final_cols += [f"MP ({now_ts})", f"MP ({t1})", f"△ MP (Live − {t1})"]
 
 final_cols += [f"MP ({t2})", "△ MP (T1 − T2)"]
@@ -201,7 +212,10 @@ st.dataframe(
     height=700,
     column_config={
         "Strike": st.column_config.NumberColumn("Strike", pinned=True),
-        **{c: st.column_config.NumberColumn(c, pinned=True) for c in final.columns if "MP (" in c},
+        **{
+            c: st.column_config.NumberColumn(c, pinned=True)
+            for c in final.columns if "MP (" in c
+        },
     },
 )
 
