@@ -77,7 +77,7 @@ def compute_max_pain(df):
         R = G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
         S = -sum(M[:i] * L[:i])
         T = sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        U.append(round((Q + R + S + T) / 10000, 8))
+        U.append(round((Q + R + S + T) / 1000000, 8))
 
     df["Max Pain"] = U
     return df
