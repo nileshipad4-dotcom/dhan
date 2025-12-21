@@ -175,7 +175,8 @@ live_data = fetch_live_chain(UNDERLYING)
 
 if live_data is not None:
     now_ts = ist_now_hhmm()
-    live_mp = compute_live_max_pain(live_data)
+    live_mp = compute_live_max_pain(live_data["oc"])
+
 
     merged = merged.merge(
         live_mp.rename(columns={"MP_live": f"MP ({now_ts})"}),
@@ -194,7 +195,7 @@ else:
 # -------------------------------------------------
 final_cols = ["Strike"]
 
-if live_data is not None:
+if live_data is not None and "oc" in live_data:
     final_cols += [f"MP ({now_ts})", f"MP ({t1})", f"△ MP (Live − {t1})"]
 
 final_cols += [f"MP ({t2})", "△ MP (T1 − T2)"]
