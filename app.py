@@ -111,7 +111,11 @@ if not data:
 oc = data["oc"]
 strikes = sorted(float(k) for k in oc.keys())
 
-center = min(strikes, key=lambda x: abs(x - index_ltp))
+if index_ltp is not None:
+    center = min(strikes, key=lambda x: abs(x - index_ltp))
+else:
+    center = strikes[len(strikes) // 2]
+
 idx = strikes.index(center)
 selected_strikes = strikes[max(0, idx - 20): idx + 21]
 
