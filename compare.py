@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 # PAGE CONFIG
 # =================================================
 st.set_page_config(layout="wide")
-st.title("📊 NIFTY / BANKNIFTY – Max Pain + Greeks Δ")
+st.title("📊 NIFTY / BANKNIFTY – Max Pain + Greeks Comparison")
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -21,15 +21,33 @@ except Exception:
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
-def rotated_time_sort(times):
-    return sorted(times, reverse=True)
+def rotated_time_sort(times, pivot="09:15"):
+    pivot_min = int(pivot[:2]) * 60 + int(pivot[3:])
+    def key(t):
+        h, m = map(int, t.split(":"))
+        return ((h * 60 + m) - pivot_min) % (24 * 60)
+    return sorted(times, key=key, reverse=True)
 
-FACTOR = 10000
+FACTOR = 10_000
 
 # =================================================
 # CONFIG
 # =================================================
 API_BASE = "https://api.dhan.co/v2"
+
+UNDERLYINGS = {
+    "NIFTY": {"scrip": 13, "seg": "IDX_I", "security_id": 256265},
+    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "security_id": 260105},
+}
+
+STRIKE_CENTER = {
+    "NIFTY": 26000,
+    "BANKNIFTY": 60000,
+}
+
+STRIKE_STEP = 100
+STRIKES_BELOW = 25
+STRIKES_ABOVE = 26
 
 HEADERS = {
     "client-id": "1102712380",
@@ -37,56 +55,68 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-UNDERLYINGS = {
-    "NIFTY": {"scrip": 13, "seg": "IDX_I", "center": 26000},
-    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "center": 60000},
-}
-
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
+CENTER = STRIKE_CENTER[UNDERLYING]
+LOWER = CENTER - STRIKES_BELOW * STRIKE_STEP
+UPPER = CENTER + STRIKES_ABOVE * STRIKE_STEP
+
 # =================================================
-# LOAD CSV (HISTORICAL)
+# LIVE INDEX PRICE
+# =================================================
+@st.cache_data(ttl=10)
+def get_index_price(sec_id):
+    r = requests.post(
+        f"{API_BASE}/marketfeed/ltp",
+        headers=HEADERS,
+        json={"NSE_IDX": [sec_id]},
+        timeout=10,
+    )
+    if r.status_code != 200:
+        return None
+    return r.json()["data"].get(str(sec_id), {}).get("ltp")
+
+spot = get_index_price(UNDERLYINGS[UNDERLYING]["security_id"])
+st.sidebar.metric("Live Price", f"{spot:.2f}" if spot else "N/A")
+
+# =================================================
+# LOAD HISTORICAL CSV
 # =================================================
 df = pd.read_csv(CSV_PATH)
 
-df["Strike"] = df["Strike"].astype(int)
+df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce").astype(int)
+df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
-# =================================================
-# IDENTICAL STRIKE SELECTION (MATCHES COLLECTOR)
-# =================================================
-center = UNDERLYINGS[UNDERLYING]["center"]
-all_strikes = sorted(df["Strike"].unique())
-
-below = [s for s in all_strikes if s <= center][-25:]
-above = [s for s in all_strikes if s > center][:26]
-SELECTED = set(below + above)
-
-df = df[df["Strike"].isin(SELECTED)]
+df = df[(df["Strike"] >= LOWER) & (df["Strike"] <= UPPER)]
 
 # =================================================
 # TIME SELECTION
 # =================================================
-timestamps = rotated_time_sort(df["timestamp"].unique())
+timestamps = rotated_time_sort(df["timestamp"].dropna().unique())
 t1 = st.selectbox("Time-1 (Latest)", timestamps, 0)
 t2 = st.selectbox("Time-2 (Previous)", timestamps, 1)
 
 # =================================================
-# HISTORICAL MAX PAIN
+# HISTORICAL MP
 # =================================================
-mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean()
-mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean()
+mp_t1 = (
+    df[df["timestamp"] == t1]
+    .groupby("Strike", as_index=False)["Max Pain"]
+    .mean()
+    .rename(columns={"Max Pain": f"MP ({t1})"})
+)
 
-final = pd.DataFrame({
-    f"MP ({t1})": mp_t1,
-    f"MP ({t2})": mp_t2,
-}).reset_index()
-
-final[f"Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
+mp_t2 = (
+    df[df["timestamp"] == t2]
+    .groupby("Strike", as_index=False)["Max Pain"]
+    .mean()
+    .rename(columns={"Max Pain": f"MP ({t2})"})
+)
 
 # =================================================
-# T1 GREEKS / IV BASE
+# T1 BASE GREEKS / IV
 # =================================================
 t1_base = (
     df[df["timestamp"] == t1]
@@ -103,13 +133,11 @@ t1_base = (
     )
 )
 
-final = final.merge(t1_base, on="Strike", how="inner")
-
 # =================================================
 # LIVE OPTION CHAIN
 # =================================================
 @st.cache_data(ttl=30)
-def fetch_live_oc():
+def fetch_live_chain():
     cfg = UNDERLYINGS[UNDERLYING]
 
     r = requests.post(
@@ -121,137 +149,142 @@ def fetch_live_oc():
     if not expiries:
         return None
 
+    expiry = expiries[0]
+
     r = requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
         json={
             "UnderlyingScrip": cfg["scrip"],
             "UnderlyingSeg": cfg["seg"],
-            "Expiry": expiries[0],
+            "Expiry": expiry,
         },
     )
     return r.json().get("data", {}).get("oc")
 
+oc = fetch_live_chain()
+
 # =================================================
 # LIVE SNAPSHOT + LIVE MAX PAIN
 # =================================================
-def compute_live_snapshot(oc, strikes):
+live_df = None
+
+if oc:
     rows = []
+    for strike, v in oc.items():
+        s = int(round(float(strike)))
+        if not (LOWER <= s <= UPPER):
+            continue
 
-    for s in strikes:
-        v = oc.get(f"{float(s):.6f}", {})
         ce, pe = v.get("ce", {}), v.get("pe", {})
-
         rows.append({
-            "Strike": int(s),
-
+            "Strike": s,
             "CE LTP": ce.get("last_price", 0),
             "CE OI": ce.get("oi", 0),
             "PE LTP": pe.get("last_price", 0),
             "PE OI": pe.get("oi", 0),
-
             "CE IV L": ce.get("implied_volatility"),
             "CE Delta L": ce.get("greeks", {}).get("delta"),
             "CE Gamma L": ce.get("greeks", {}).get("gamma"),
             "CE Vega L": ce.get("greeks", {}).get("vega"),
-
             "PE IV L": pe.get("implied_volatility"),
             "PE Delta L": pe.get("greeks", {}).get("delta"),
             "PE Gamma L": pe.get("greeks", {}).get("gamma"),
             "PE Vega L": pe.get("greeks", {}).get("vega"),
         })
 
-    df_live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+    live_df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    A, B = df_live["CE LTP"], df_live["CE OI"]
-    G, L, M = df_live["Strike"], df_live["PE OI"], df_live["PE LTP"]
+    A, B = live_df["CE LTP"], live_df["CE OI"]
+    G, L, M = live_df["Strike"], live_df["PE OI"], live_df["PE LTP"]
 
-    df_live["MP_live"] = [
-        int((
-            -sum(A[i:] * B[i:])
-            + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
-            - sum(M[:i] * L[:i])
-            + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        ) / 10000)
-        for i in range(len(df_live))
+    live_df["MP_live"] = [
+        round(
+            (
+                -sum(A[i:] * B[i:])
+                + G.iloc[i] * sum(B[:i])
+                - sum(G[:i] * B[:i])
+                - sum(M[:i] * L[:i])
+                + sum(G[i:] * L[i:])
+                - G.iloc[i] * sum(L[i:])
+            ) / 10000
+        )
+        for i in range(len(live_df))
     ]
 
-    return df_live
-
 # =================================================
-# MERGE LIVE DATA
+# FINAL MERGE
 # =================================================
-oc = fetch_live_oc()
+final = (
+    mp_t1
+    .merge(mp_t2, on="Strike", how="inner")
+    .merge(t1_base, on="Strike", how="inner")
+)
 
-if oc:
-    live_df = compute_live_snapshot(oc, SELECTED)
-    now = ist_hhmm()
+now = ist_hhmm()
 
-    final = final.merge(
-        live_df[[
-            "Strike","MP_live",
-            "CE IV L","CE Delta L","CE Gamma L","CE Vega L",
-            "PE IV L","PE Delta L","PE Gamma L","PE Vega L",
-        ]],
-        on="Strike",
-        how="inner",
-    )
+if live_df is not None:
+    final = final.merge(live_df, on="Strike", how="inner")
 
     final[f"MP ({now})"] = final["MP_live"]
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
-    final["ΔΔ MP"] = (
-    final[f"Δ MP (Live − {t1})"]
-    - final[f"Δ MP (Live − {t1})"].shift(1)
-    )
+    final[f"Δ MP (T1 − {t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
+    final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"] - final[f"Δ MP (Live − {t1})"].shift(1)
 
-    
-    
     final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"])    * FACTOR
-    final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
-    final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
-    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"])  * FACTOR
-
     final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"])    * FACTOR
-    final["PE Delta Δ"] = (final["PE Delta L"] - final["PE_Delta_T1"]) * FACTOR
+    final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
     final["PE Gamma Δ"] = (final["PE Gamma L"] - final["PE_Gamma_T1"]) * FACTOR
+    final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
+    final["PE Delta Δ"] = (final["PE Delta L"] - final["PE_Delta_T1"]) * FACTOR
+    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"])  * FACTOR
     final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"])  * FACTOR
 
 # =================================================
-# FINAL VIEW
+# COLUMN ORDER
 # =================================================
-cols = [
+final = final[[
     "Strike",
     f"MP ({now})",
     f"MP ({t1})",
     f"Δ MP (Live − {t1})",
     "ΔΔ MP",
     f"MP ({t2})",
-    f"Δ MP (T1 − T2)",
+    f"Δ MP (T1 − {t2})",
+    "CE IV Δ","PE IV Δ",
+    "CE Gamma Δ","PE Gamma Δ",
+    "CE Delta Δ","PE Delta Δ",
+    "CE Vega Δ","PE Vega Δ",
+]].round(0)
 
-    # ---- IV ----
-    "CE IV Δ",
-    "PE IV Δ",
+# =================================================
+# HIGHLIGHT TRUE LIVE MAX PAIN
+# =================================================
+live_mp_col = f"MP ({now})"
+min_mp_strike = final.loc[final[live_mp_col].idxmin(), "Strike"]
 
-    # ---- GAMMA ----
-    "CE Gamma Δ",
-    "PE Gamma Δ",
+def highlight_mp(row):
+    if row["Strike"] == min_mp_strike:
+        return ["background-color:#8B0000;color:white"] * len(row)
+    return [""] * len(row)
 
-    # ---- DELTA ----
-    "CE Delta Δ",
-    "PE Delta Δ",
-
-    # ---- VEGA ----
-    "CE Vega Δ",
-    "PE Vega Δ",
-]
-
-
-final = final[cols].sort_values("Strike").round(0)
-
-st.dataframe(final, use_container_width=True, height=750)
+# =================================================
+# DISPLAY
+# =================================================
+st.dataframe(
+    final.style.apply(highlight_mp, axis=1),
+    use_container_width=True,
+    height=750,
+    column_config={
+        "Strike": st.column_config.NumberColumn("Strike", pinned=True),
+        live_mp_col: st.column_config.NumberColumn(live_mp_col, pinned=True),
+        f"MP ({t1})": st.column_config.NumberColumn(f"MP ({t1})", pinned=True),
+        f"Δ MP (Live − {t1})": st.column_config.NumberColumn(f"Δ MP (Live − {t1})", pinned=True),
+        "ΔΔ MP": st.column_config.NumberColumn("ΔΔ MP", pinned=True),
+    },
+)
 
 st.caption(
-    "Strike set identical to collector | 25 below + 26 above | "
-    "Δ = Live − T1 | IV & Greeks ×10000"
+    "Strike window: 25 below / 26 above | Δ = Live − T1 | Greeks & IV ×10000 | True live MP highlighted"
 )
