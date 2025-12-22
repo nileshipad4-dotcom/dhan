@@ -46,14 +46,29 @@ CENTER = UNDERLYINGS[UNDERLYING]["center"]
 # =================================================
 # LOAD HISTORICAL CSV
 # =================================================
-df = pd.read_csv(CSV_PATH)
+try:
+    df = pd.read_csv(CSV_PATH)
+except Exception:
+    st.error("❌ CSV not found. Run collector.py first.")
+    st.stop()
+
+required_cols = [
+    "Strike","CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
+    "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega",
+    "timestamp","Max Pain"
+]
+
+missing = [c for c in required_cols if c not in df.columns]
+if missing:
+    st.error(f"❌ CSV schema mismatch. Missing columns: {missing}")
+    st.stop()
 
 df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce").astype(int)
 df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
 # =================================================
-# STRIKE WINDOW (EXACTLY LIKE COLLECTOR)
+# STRIKE WINDOW (IDENTICAL TO COLLECTOR)
 # =================================================
 all_strikes = sorted(df["Strike"].unique())
 below = [s for s in all_strikes if s <= CENTER][-25:]
@@ -66,6 +81,10 @@ df = df[df["Strike"].isin(STRIKES)]
 # TIME SELECTION
 # =================================================
 times = sorted(df["timestamp"].unique(), reverse=True)
+if len(times) < 2:
+    st.error("❌ Need at least 2 timestamps in CSV")
+    st.stop()
+
 t1 = st.selectbox("Time-1 (Latest)", times, 0)
 t2 = st.selectbox("Time-2 (Previous)", times, 1)
 
@@ -105,7 +124,7 @@ t1_base = (
 final = final.merge(t1_base, on="Strike", how="inner")
 
 # =================================================
-# LIVE OPTION CHAIN
+# LIVE OPTION CHAIN (SAFE)
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc():
@@ -115,7 +134,11 @@ def fetch_live_oc():
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
         json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
+        timeout=10,
     )
+    if r.status_code != 200:
+        return None
+
     expiries = r.json().get("data", [])
     if not expiries:
         return None
@@ -128,16 +151,22 @@ def fetch_live_oc():
             "UnderlyingSeg": cfg["seg"],
             "Expiry": expiries[0],
         },
+        timeout=10,
     )
+    if r.status_code != 200:
+        return None
+
     return r.json().get("data", {}).get("oc")
 
 # =================================================
-# LIVE SNAPSHOT + LIVE MAX PAIN
+# LIVE SNAPSHOT
 # =================================================
 oc = fetch_live_oc()
 now = ist_hhmm()
 
-if oc:
+if not oc:
+    st.warning("⚠️ Live option chain unavailable (market closed / API issue)")
+else:
     rows = []
     for s in STRIKES:
         v = oc.get(f"{float(s):.6f}", {})
@@ -162,12 +191,12 @@ if oc:
 
     live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    # ---- LIVE MAX PAIN (IDENTICAL FORMULA, ÷100) ----
+    # ---- LIVE MAX PAIN (÷100) ----
     A, B = live["CE LTP"], live["CE OI"]
     G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
     live["MP_live"] = [
-        int(((
+        int((( 
             -sum(A[i:] * B[i:])
             + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
             - sum(M[:i] * L[:i])
@@ -180,10 +209,9 @@ if oc:
 
     final[f"MP ({now})"] = final["MP_live"]
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
-
     final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"] - final[f"Δ MP (Live − {t1})"].shift(1)
 
-    # ---- GREEKS / IV Δ (LIVE − T1) ----
+    # ---- GREEKS Δ ----
     final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"]) * FACTOR
     final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"]) * FACTOR
     final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
@@ -194,7 +222,7 @@ if oc:
     final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"]) * FACTOR
 
 # =================================================
-# FINAL COLUMN ORDER
+# FINAL VIEW
 # =================================================
 cols = [
     "Strike",
@@ -210,22 +238,14 @@ cols = [
     "CE Vega Δ","PE Vega Δ",
 ]
 
-final = final[cols].copy()
+final = final[cols]
 
-# =================================================
-# FORMATTING (IMPORTANT)
-# =================================================
-mp_cols = [c for c in final.columns if "MP" in c]
-for c in mp_cols:
-    final[c] = final[c].astype("Int64")
+for c in final.columns:
+    if "MP" in c:
+        final[c] = final[c].astype("Int64")
+    elif "Δ" in c:
+        final[c] = final[c].round(1)
 
-greek_cols = [c for c in final.columns if "Δ" in c and "MP" not in c]
-for c in greek_cols:
-    final[c] = final[c].round(1)
-
-# =================================================
-# HIGHLIGHT MIN LIVE MP
-# =================================================
 min_strike = final.loc[final[f"MP ({now})"].idxmin(), "Strike"]
 
 def highlight(row):
