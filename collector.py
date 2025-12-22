@@ -95,29 +95,29 @@ def main():
             v = oc.get(f"{s:.6f}", {})
             ce, pe = v.get("ce", {}), v.get("pe", {})
 
-            rows.append({
-                "Strike": int(s),
+          rows.append({
+            "Strike": int(s),
 
-                # ---------- CALL ----------
-                "CE LTP": ce.get("last_price"),
-                "CE OI": ce.get("oi"),
-                "CE Volume": ce.get("volume"),        # ✅ ADDED
-                "CE IV": ce.get("implied_volatility"),
-                "CE Delta": ce.get("greeks", {}).get("delta"),
-                "CE Gamma": ce.get("greeks", {}).get("gamma"),
-                "CE Vega": ce.get("greeks", {}).get("vega"),
-
-                # ---------- PUT ----------
-                "PE LTP": pe.get("last_price"),
-                "PE OI": pe.get("oi"),
-                "PE Volume": pe.get("volume"),        # ✅ ADDED
-                "PE IV": pe.get("implied_volatility"),
-                "PE Delta": pe.get("greeks", {}).get("delta"),
-                "PE Gamma": pe.get("greeks", {}).get("gamma"),
-                "PE Vega": pe.get("greeks", {}).get("vega"),
-
-                "timestamp": ts,
-            })
+            # ---------- CALL ----------
+            "CE LTP": ce.get("last_price"),
+            "CE OI": ce.get("oi"),
+            "CE Volume": ce.get("volume"),
+            "CE IV": ce.get("implied_volatility"),
+            "CE Delta": ce.get("greeks", {}).get("delta"),
+            "CE Gamma": ce.get("greeks", {}).get("gamma"),
+            "CE Vega": ce.get("greeks", {}).get("vega"),
+        
+            # ---------- PUT ----------
+            "PE LTP": pe.get("last_price"),
+            "PE OI": pe.get("oi"),
+            "PE Volume": pe.get("volume"),
+            "PE IV": pe.get("implied_volatility"),
+            "PE Delta": pe.get("greeks", {}).get("delta"),
+            "PE Gamma": pe.get("greeks", {}).get("gamma"),
+            "PE Vega": pe.get("greeks", {}).get("vega"),
+        
+            "timestamp": ts,
+        })
 
         if not rows:
             continue
@@ -130,10 +130,7 @@ def main():
             "PE LTP","PE OI","PE Volume","PE IV","PE Delta","PE Gamma","PE Vega",
         ]
 
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = pd.NA
-
+      
 
         # ================= FORCE NUMERIC =================
         num_cols = [
