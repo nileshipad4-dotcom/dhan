@@ -207,9 +207,19 @@ for c in final.columns:
 # =================================================
 # ROUND IV & GREEKS TO 1 DECIMAL
 # =================================================
+# =================================================
+# FORMAT OUTPUT (MP = INT, GREEKS/IV = 1 DECIMAL)
+# =================================================
 for c in final.columns:
-    if any(k in c for k in ["IV", "Delta", "Gamma", "Vega"]):
+
+    # ---- Max Pain columns ----
+    if "MP" in c:
+        final[c] = pd.to_numeric(final[c], errors="coerce").fillna(0).astype(int)
+
+    # ---- Greeks & IV columns ----
+    elif "IV" in c or "Delta" in c or "Gamma" in c or "Vega" in c:
         final[c] = pd.to_numeric(final[c], errors="coerce").round(1)
+
 
 
 # =================================================
@@ -229,7 +239,7 @@ cols = [
     "CE Vega Δ","PE Vega Δ",
 ]
 
-final = final[cols].round(0)
+
 
 # =================================================
 # STYLING
