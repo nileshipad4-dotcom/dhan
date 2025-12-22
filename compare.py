@@ -3,7 +3,6 @@
 import streamlit as st
 import pandas as pd
 import requests
-import yfinance as yf
 from datetime import datetime, timedelta
 
 # =================================================
@@ -24,23 +23,6 @@ except Exception:
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
-
-@st.cache_data(ttl=2)
-def get_dhan_index_price(security_id):
-    try:
-        r = requests.post(
-            "https://api.dhan.co/v2/marketfeed/ltp",
-            headers=HEADERS,
-            json={"NSE_IDX": [security_id]},
-            timeout=5,
-        )
-        if r.status_code == 200:
-            return int(r.json()["data"][str(security_id)]["ltp"])
-    except Exception:
-        pass
-    return None
-
-
 FACTOR = 10000
 
 # =================================================
@@ -60,35 +42,7 @@ UNDERLYINGS = {
 }
 
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
-SECURITY_IDS = {
-    "NIFTY": 256265,
-    "BANKNIFTY": 260105,
-}
-
-live_price = get_dhan_index_price(SECURITY_IDS[UNDERLYING])
-
-st.sidebar.metric(
-    label=f"{UNDERLYING} LIVE Price",
-    value=str(live_price) if live_price else "N/A"
-)
-
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
-
-# =================================================
-# LIVE INDEX PRICE (YFINANCE)
-# =================================================
-YF_SYMBOLS = {
-    "NIFTY": "^NSEI",
-    "BANKNIFTY": "^NSEBANK",
-}
-
-live_price = get_yf_index_price(YF_SYMBOLS[UNDERLYING])
-
-st.sidebar.metric(
-    label=f"{UNDERLYING} Live Price (Yahoo)",
-    value=str(live_price) if live_price else "N/A"
-)
-
 
 CENTER = UNDERLYINGS[UNDERLYING]["center"]
 
