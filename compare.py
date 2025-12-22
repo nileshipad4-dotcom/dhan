@@ -39,10 +39,17 @@ def get_yahoo_price(index_name):
         return None
 
 def compute_pcr_from_df(d):
-    return (
-        d["put_oi"].sum() / d["call_oi"].sum() if d["call_oi"].sum() else None,
-        d["put_vol"].sum() / d["call_vol"].sum() if d["call_vol"].sum() else None,
-    )
+    call_oi = d["CE OI"].sum()
+    put_oi  = d["PE OI"].sum()
+
+    call_vol = d["CE Volume"].sum() if "CE Volume" in d else None
+    put_vol  = d["PE Volume"].sum() if "PE Volume" in d else None
+
+    pcr_oi = (put_oi / call_oi) if call_oi else None
+    pcr_vol = (put_vol / call_vol) if call_vol else None
+
+    return pcr_oi, pcr_vol
+
 
 
 FACTOR = 10000
