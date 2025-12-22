@@ -6,7 +6,7 @@ import os
 
 # ================= CONFIG =================
 CLIENT_ID = "1102712380"
-ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2NDQwMzk5LCJpYXQiOjE3NjYzNTM5OTksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.pLY-IzrzCrJIYWLLxo5_FD10k4F1MkgFQB9BOyQm5kIf969v7q0nyxvfyl2NniyhrWDiVWWACAWrW8kxIf3cxA"
+ACCESS_TOKEN = "YOUR_TOKEN_HERE"
 
 API_BASE = "https://api.dhan.co/v2"
 
@@ -98,15 +98,19 @@ def main():
             rows.append({
                 "Strike": int(s),
 
+                # ---------- CALL ----------
                 "CE LTP": ce.get("last_price"),
                 "CE OI": ce.get("oi"),
+                "CE Volume": ce.get("volume"),        # ✅ ADDED
                 "CE IV": ce.get("implied_volatility"),
                 "CE Delta": ce.get("greeks", {}).get("delta"),
                 "CE Gamma": ce.get("greeks", {}).get("gamma"),
                 "CE Vega": ce.get("greeks", {}).get("vega"),
 
+                # ---------- PUT ----------
                 "PE LTP": pe.get("last_price"),
                 "PE OI": pe.get("oi"),
+                "PE Volume": pe.get("volume"),        # ✅ ADDED
                 "PE IV": pe.get("implied_volatility"),
                 "PE Delta": pe.get("greeks", {}).get("delta"),
                 "PE Gamma": pe.get("greeks", {}).get("gamma"),
@@ -118,17 +122,12 @@ def main():
         if not rows:
             continue
 
-        df = (
-            pd.DataFrame(rows)
-            .sort_values("Strike")
-            .reset_index(drop=True)
-        )
+        df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-        # ================= IMPORTANT FIX 1 =================
-        # FORCE NUMERIC (prevents silent MP / Greek errors)
+        # ================= FORCE NUMERIC =================
         num_cols = [
-            "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
-            "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega"
+            "CE LTP","CE OI","CE Volume","CE IV","CE Delta","CE Gamma","CE Vega",
+            "PE LTP","PE OI","PE Volume","PE IV","PE Delta","PE Gamma","PE Vega",
         ]
         for c in num_cols:
             if c in df.columns:
@@ -137,13 +136,14 @@ def main():
         # ================= MAX PAIN =================
         df = compute_max_pain(df)
 
-        # ================= IMPORTANT FIX 2 =================
-        # COLUMN ORDER LOCK (guarantees compare.py stability)
+        # ================= COLUMN ORDER LOCK =================
         df = df[
             [
                 "Strike",
-                "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
-                "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega",
+
+                "CE LTP","CE OI","CE Volume","CE IV","CE Delta","CE Gamma","CE Vega",
+                "PE LTP","PE OI","PE Volume","PE IV","PE Delta","PE Gamma","PE Vega",
+
                 "timestamp",
                 "Max Pain",
             ]
