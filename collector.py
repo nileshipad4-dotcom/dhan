@@ -86,8 +86,8 @@ def main():
         strikes = sorted(float(s) for s in oc.keys())
 
         center = cfg["center"]
-        below = [s for s in strikes if s <= center][-25:]
-        above = [s for s in strikes if s > center][:26]
+        below = [s for s in strikes if s <= center][-15:]
+        above = [s for s in strikes if s > center][:16]
         selected = set(below + above)
 
         rows = []
