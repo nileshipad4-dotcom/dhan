@@ -24,14 +24,27 @@ except Exception:
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
-@st.cache_data(ttl=15)
+
+@st.cache_data(ttl=10)
 def get_yf_index_price(symbol):
     try:
-        ticker = yf.Ticker(symbol)
-        price = ticker.fast_info.get("last_price")
-        return int(price) if price else None
+        t = yf.Ticker(symbol)
+
+        # 1️⃣ Fast path
+        price = t.fast_info.get("last_price")
+        if price:
+            return int(price)
+
+        # 2️⃣ Reliable fallback
+        hist = t.history(period="1d", interval="1m")
+        if not hist.empty:
+            return int(hist["Close"].iloc[-1])
+
     except Exception:
-        return None
+        pass
+
+    return None
+
 
 
 FACTOR = 10000
