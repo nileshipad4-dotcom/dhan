@@ -210,15 +210,6 @@ for c in final.columns:
 # =================================================
 # FORMAT OUTPUT (MP = INT, GREEKS/IV = 1 DECIMAL)
 # =================================================
-for c in final.columns:
-
-    # ---- Max Pain columns ----
-    if "MP" in c:
-        final[c] = pd.to_numeric(final[c], errors="coerce").fillna(0).astype(int)
-
-    # ---- Greeks & IV columns ----
-    elif "IV" in c or "Delta" in c or "Gamma" in c or "Vega" in c:
-        final[c] = pd.to_numeric(final[c], errors="coerce").round(1)
 
 
 
@@ -256,6 +247,18 @@ def highlight(row):
     return styles
 
 styled = final.style.apply(highlight, axis=1)
+
+
+for c in final.columns:
+
+    # ---- Max Pain columns ----
+    if "MP" in c:
+        final[c] = pd.to_numeric(final[c], errors="coerce").fillna(0).astype(int)
+
+    # ---- Greeks & IV columns ----
+    elif "IV" in c or "Delta" in c or "Gamma" in c or "Vega" in c:
+        final[c] = pd.to_numeric(final[c], errors="coerce").round(1)
+
 
 st.dataframe(
     styled,
