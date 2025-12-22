@@ -56,8 +56,8 @@ df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 # STRIKE WINDOW (MATCHES COLLECTOR)
 # =================================================
 all_strikes = sorted(df["Strike"].dropna().unique())
-below = [s for s in all_strikes if s <= CENTER][-25:]
-above = [s for s in all_strikes if s > CENTER][:26]
+below = [s for s in all_strikes if s <= CENTER][-15:]
+above = [s for s in all_strikes if s > CENTER][:16]
 STRIKES = set(below + above)
 
 df = df[df["Strike"].isin(STRIKES)]
