@@ -35,13 +35,48 @@ HEADERS = {
 }
 
 UNDERLYINGS = {
-    "NIFTY": {"scrip": 13, "seg": "IDX_I", "center": 26000},
-    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "center": 60000},
+    "NIFTY": {
+        "scrip": 13,
+        "seg": "IDX_I",
+        "center": 26000,
+        "security_id": 256265,
+    },
+    "BANKNIFTY": {
+        "scrip": 25,
+        "seg": "IDX_I",
+        "center": 60000,
+        "security_id": 260105,
+    },
 }
 
+# =================================================
+# LIVE INDEX PRICE
+# =================================================
+@st.cache_data(ttl=5)
+def get_index_price(security_id):
+    r = requests.post(
+        f"{API_BASE}/marketfeed/ltp",
+        headers=HEADERS,
+        json={"NSE_IDX": [security_id]},
+    )
+    if r.status_code != 200:
+        return None
+
+    data = r.json().get("data", {}).get(str(security_id), {})
+    return data.get("ltp")
+
+# =================================================
+# SIDEBAR
+# =================================================
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CENTER = UNDERLYINGS[UNDERLYING]["center"]
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
+
+live_price = get_index_price(UNDERLYINGS[UNDERLYING]["security_id"])
+st.sidebar.metric(
+    f"{UNDERLYING} Live Price",
+    f"{int(live_price)}" if live_price else "N/A",
+)
 
 # =================================================
 # LOAD CSV
@@ -56,8 +91,8 @@ df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 # STRIKE WINDOW (MATCHES COLLECTOR)
 # =================================================
 all_strikes = sorted(df["Strike"].dropna().unique())
-below = [s for s in all_strikes if s <= CENTER][-15:]
-above = [s for s in all_strikes if s > CENTER][:16]
+below = [s for s in all_strikes if s <= CENTER][-25:]
+above = [s for s in all_strikes if s > CENTER][:26]
 STRIKES = set(below + above)
 
 df = df[df["Strike"].isin(STRIKES)]
@@ -158,7 +193,7 @@ if oc:
 
     live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    # ---------------- LIVE MAX PAIN ----------------
+    # LIVE MAX PAIN
     A, B = live["CE LTP"], live["CE OI"]
     G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
@@ -177,7 +212,7 @@ if oc:
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"] - final[f"Δ MP (Live − {t1})"].shift(1)
 
-    # ---------------- GREEKS Δ ----------------
+    # GREEKS Δ
     final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"]) * FACTOR
     final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"]) * FACTOR
     final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
