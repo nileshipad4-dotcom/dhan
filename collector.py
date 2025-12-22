@@ -124,6 +124,17 @@ def main():
 
         df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
+        # ================= FORCE COLUMN EXISTENCE (CRITICAL) =================
+        required_cols = [
+            "CE LTP","CE OI","CE Volume","CE IV","CE Delta","CE Gamma","CE Vega",
+            "PE LTP","PE OI","PE Volume","PE IV","PE Delta","PE Gamma","PE Vega",
+        ]
+
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = pd.NA
+
+
         # ================= FORCE NUMERIC =================
         num_cols = [
             "CE LTP","CE OI","CE Volume","CE IV","CE Delta","CE Gamma","CE Vega",
