@@ -54,8 +54,7 @@ def pcr_from_csv(df_snap):
     put_vol = df_snap.get("PE Volume", pd.Series()).sum()
     return compute_pcr(call_oi, put_oi, call_vol, put_vol)
 
-pcr_t1_oi, pcr_t1_vol = pcr_from_csv(df[df["timestamp"] == t1])
-pcr_t2_oi, pcr_t2_vol = pcr_from_csv(df[df["timestamp"] == t2])
+
 
 
 FACTOR = 10000
@@ -113,6 +112,10 @@ df = df[df["Strike"].isin(STRIKES)]
 times = sorted(df["timestamp"].unique(), reverse=True)
 t1 = st.selectbox("Time-1 (Latest)", times, 0)
 t2 = st.selectbox("Time-2 (Previous)", times, 1)
+
+pcr_t1_oi, pcr_t1_vol = pcr_from_csv(df[df["timestamp"] == t1])
+pcr_t2_oi, pcr_t2_vol = pcr_from_csv(df[df["timestamp"] == t2])
+
 
 # =================================================
 # HISTORICAL MAX PAIN
