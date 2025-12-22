@@ -60,6 +60,18 @@ UNDERLYINGS = {
 }
 
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
+SECURITY_IDS = {
+    "NIFTY": 256265,
+    "BANKNIFTY": 260105,
+}
+
+live_price = get_dhan_index_price(SECURITY_IDS[UNDERLYING])
+
+st.sidebar.metric(
+    label=f"{UNDERLYING} LIVE Price",
+    value=str(live_price) if live_price else "N/A"
+)
+
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
 # =================================================
