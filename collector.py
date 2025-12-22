@@ -98,23 +98,24 @@ def main():
             rows.append({
                 "Strike": int(s),
 
-                "CE LTP": ce.get("last_price", 0),
-                "CE OI": ce.get("oi", 0),
-                "CE Volume": ce.get("volume"),   # <-- ADD (may be None)
+                # ---------- CALL ----------
+                "CE LTP": ce.get("last_price"),
+                "CE OI": ce.get("oi"),
+                "CE Volume": ce.get("volume"),        # ✅ ADDED
+                "CE IV": ce.get("implied_volatility"),
+                "CE Delta": ce.get("greeks", {}).get("delta"),
+                "CE Gamma": ce.get("greeks", {}).get("gamma"),
+                "CE Vega": ce.get("greeks", {}).get("vega"),
 
-                "PE LTP": pe.get("last_price", 0),
-                "PE OI": pe.get("oi", 0),
-                "PE Volume": pe.get("volume"),   # <-- ADD (may be None)
+                # ---------- PUT ----------
+                "PE LTP": pe.get("last_price"),
+                "PE OI": pe.get("oi"),
+                "PE Volume": pe.get("volume"),        # ✅ ADDED
+                "PE IV": pe.get("implied_volatility"),
+                "PE Delta": pe.get("greeks", {}).get("delta"),
+                "PE Gamma": pe.get("greeks", {}).get("gamma"),
+                "PE Vega": pe.get("greeks", {}).get("vega"),
 
-                "CE IV L": ce.get("implied_volatility"),
-                "CE Delta L": ce.get("greeks", {}).get("delta"),
-                "CE Gamma L": ce.get("greeks", {}).get("gamma"),
-                "CE Vega L": ce.get("greeks", {}).get("vega"),
-
-                "PE IV L": pe.get("implied_volatility"),
-                "PE Delta L": pe.get("greeks", {}).get("delta"),
-                "PE Gamma L": pe.get("greeks", {}).get("gamma"),
-                "PE Vega L": pe.get("greeks", {}).get("vega"),
                 "timestamp": ts,
             })
 
