@@ -82,8 +82,8 @@ df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 # STRIKE WINDOW (IDENTICAL TO COLLECTOR)
 # =================================================
 all_strikes = sorted(df["Strike"].unique())
-below = [s for s in all_strikes if s <= CENTER][-25:]
-above = [s for s in all_strikes if s > CENTER][:26]
+below = [s for s in all_strikes if s <= CENTER][-17:]
+above = [s for s in all_strikes if s > CENTER][:18]
 STRIKES = set(below + above)
 
 df = df[df["Strike"].isin(STRIKES)]
