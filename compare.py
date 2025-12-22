@@ -3,6 +3,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+import yfinance as yf
 from datetime import datetime, timedelta
 
 # =================================================
@@ -22,6 +23,16 @@ except Exception:
 # =================================================
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
+
+@st.cache_data(ttl=15)
+def get_yf_index_price(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        price = ticker.fast_info.get("last_price")
+        return int(price) if price else None
+    except Exception:
+        return None
+
 
 FACTOR = 10000
 
@@ -43,6 +54,22 @@ UNDERLYINGS = {
 
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
+
+# =================================================
+# LIVE INDEX PRICE (YFINANCE)
+# =================================================
+YF_SYMBOLS = {
+    "NIFTY": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
+}
+
+live_price = get_yf_index_price(YF_SYMBOLS[UNDERLYING])
+
+st.sidebar.metric(
+    label=f"{UNDERLYING} Live Price (Yahoo)",
+    value=str(live_price) if live_price else "N/A"
+)
+
 
 CENTER = UNDERLYINGS[UNDERLYING]["center"]
 
