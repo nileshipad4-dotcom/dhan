@@ -40,37 +40,22 @@ UNDERLYINGS = {
 }
 
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
-CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 CENTER = UNDERLYINGS[UNDERLYING]["center"]
+CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
 # =================================================
-# LOAD HISTORICAL CSV
+# LOAD CSV
 # =================================================
-try:
-    df = pd.read_csv(CSV_PATH)
-except Exception:
-    st.error("❌ CSV not found. Run collector.py first.")
-    st.stop()
+df = pd.read_csv(CSV_PATH)
 
-required_cols = [
-    "Strike","CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
-    "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega",
-    "timestamp","Max Pain"
-]
-
-missing = [c for c in required_cols if c not in df.columns]
-if missing:
-    st.error(f"❌ CSV schema mismatch. Missing columns: {missing}")
-    st.stop()
-
-df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce").astype(int)
+df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
 df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
 # =================================================
-# STRIKE WINDOW (IDENTICAL TO COLLECTOR)
+# STRIKE WINDOW (MATCHES COLLECTOR)
 # =================================================
-all_strikes = sorted(df["Strike"].unique())
+all_strikes = sorted(df["Strike"].dropna().unique())
 below = [s for s in all_strikes if s <= CENTER][-25:]
 above = [s for s in all_strikes if s > CENTER][:26]
 STRIKES = set(below + above)
@@ -81,15 +66,11 @@ df = df[df["Strike"].isin(STRIKES)]
 # TIME SELECTION
 # =================================================
 times = sorted(df["timestamp"].unique(), reverse=True)
-if len(times) < 2:
-    st.error("❌ Need at least 2 timestamps in CSV")
-    st.stop()
-
 t1 = st.selectbox("Time-1 (Latest)", times, 0)
 t2 = st.selectbox("Time-2 (Previous)", times, 1)
 
 # =================================================
-# HISTORICAL MAX PAIN (÷100)
+# HISTORICAL MAX PAIN
 # =================================================
 mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
 mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
@@ -124,7 +105,7 @@ t1_base = (
 final = final.merge(t1_base, on="Strike", how="inner")
 
 # =================================================
-# LIVE OPTION CHAIN (SAFE)
+# LIVE OPTION CHAIN
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc():
@@ -134,11 +115,7 @@ def fetch_live_oc():
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
         json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
-        timeout=10,
     )
-    if r.status_code != 200:
-        return None
-
     expiries = r.json().get("data", [])
     if not expiries:
         return None
@@ -151,22 +128,13 @@ def fetch_live_oc():
             "UnderlyingSeg": cfg["seg"],
             "Expiry": expiries[0],
         },
-        timeout=10,
     )
-    if r.status_code != 200:
-        return None
-
     return r.json().get("data", {}).get("oc")
 
-# =================================================
-# LIVE SNAPSHOT
-# =================================================
 oc = fetch_live_oc()
 now = ist_hhmm()
 
-if not oc:
-    st.warning("⚠️ Live option chain unavailable (market closed / API issue)")
-else:
+if oc:
     rows = []
     for s in STRIKES:
         v = oc.get(f"{float(s):.6f}", {})
@@ -178,7 +146,6 @@ else:
             "CE OI": ce.get("oi", 0),
             "PE LTP": pe.get("last_price", 0),
             "PE OI": pe.get("oi", 0),
-
             "CE IV L": ce.get("implied_volatility"),
             "PE IV L": pe.get("implied_volatility"),
             "CE Gamma L": ce.get("greeks", {}).get("gamma"),
@@ -191,17 +158,16 @@ else:
 
     live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    # ---- LIVE MAX PAIN (÷100) ----
+    # ---------------- LIVE MAX PAIN ----------------
     A, B = live["CE LTP"], live["CE OI"]
     G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
     live["MP_live"] = [
-        int((( 
-            -sum(A[i:] * B[i:])
-            + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
-            - sum(M[:i] * L[:i])
-            + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        ) / 10000) / 100)
+        ((-sum(A[i:] * B[i:])
+          + G.iloc[i] * sum(B[:i]) - sum(G[:i] * B[:i])
+          - sum(M[:i] * L[:i])
+          + sum(G[i:] * L[i:]) - G.iloc[i] * sum(L[i:])
+         ) / 10000) / 100
         for i in range(len(live))
     ]
 
@@ -211,7 +177,7 @@ else:
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"] - final[f"Δ MP (Live − {t1})"].shift(1)
 
-    # ---- GREEKS Δ ----
+    # ---------------- GREEKS Δ ----------------
     final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"]) * FACTOR
     final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"]) * FACTOR
     final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
@@ -238,14 +204,17 @@ cols = [
     "CE Vega Δ","PE Vega Δ",
 ]
 
-final = final[cols]
+final = final[cols].apply(pd.to_numeric, errors="coerce")
 
-for c in final.columns:
-    if "MP" in c:
-        final[c] = final[c].astype("Int64")
-    elif "Δ" in c:
-        final[c] = final[c].round(1)
+mp_cols = [c for c in final.columns if "MP" in c]
+final[mp_cols] = final[mp_cols].round(0)
 
+greek_cols = [c for c in final.columns if "Δ" in c and "MP" not in c]
+final[greek_cols] = final[greek_cols].round(1)
+
+# =================================================
+# STYLING
+# =================================================
 min_strike = final.loc[final[f"MP ({now})"].idxmin(), "Strike"]
 
 def highlight(row):
