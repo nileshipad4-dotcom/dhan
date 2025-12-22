@@ -1,5 +1,3 @@
-
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -43,11 +41,10 @@ UNDERLYINGS = {
 
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
-
 CENTER = UNDERLYINGS[UNDERLYING]["center"]
 
 # =================================================
-# LOAD CSV (HISTORICAL)
+# LOAD HISTORICAL CSV
 # =================================================
 df = pd.read_csv(CSV_PATH)
 
@@ -56,7 +53,7 @@ df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
 # =================================================
-# STRIKE WINDOW (IDENTICAL TO COLLECTOR)
+# STRIKE WINDOW (EXACTLY LIKE COLLECTOR)
 # =================================================
 all_strikes = sorted(df["Strike"].unique())
 below = [s for s in all_strikes if s <= CENTER][-25:]
@@ -73,15 +70,16 @@ t1 = st.selectbox("Time-1 (Latest)", times, 0)
 t2 = st.selectbox("Time-2 (Previous)", times, 1)
 
 # =================================================
-# HISTORICAL MAX PAIN
+# HISTORICAL MAX PAIN (÷100)
 # =================================================
-mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 10
-mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 10
+mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
+mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
 
 final = pd.DataFrame({
-    f"MP ({t1})": mp_t1,
-    f"MP ({t2})": mp_t2,
-}).reset_index()
+    "Strike": mp_t1.index,
+    f"MP ({t1})": mp_t1.values,
+    f"MP ({t2})": mp_t2.reindex(mp_t1.index).values,
+})
 
 final["Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
@@ -94,12 +92,12 @@ t1_base = (
     .mean(numeric_only=True)
     .rename(columns={
         "CE IV": "CE_IV_T1",
-        "CE Delta": "CE_Delta_T1",
-        "CE Gamma": "CE_Gamma_T1",
-        "CE Vega": "CE_Vega_T1",
         "PE IV": "PE_IV_T1",
-        "PE Delta": "PE_Delta_T1",
+        "CE Gamma": "CE_Gamma_T1",
         "PE Gamma": "PE_Gamma_T1",
+        "CE Delta": "CE_Delta_T1",
+        "PE Delta": "PE_Delta_T1",
+        "CE Vega": "CE_Vega_T1",
         "PE Vega": "PE_Vega_T1",
     })
 )
@@ -153,68 +151,50 @@ if oc:
             "PE OI": pe.get("oi", 0),
 
             "CE IV L": ce.get("implied_volatility"),
-            "CE Delta L": ce.get("greeks", {}).get("delta"),
-            "CE Gamma L": ce.get("greeks", {}).get("gamma"),
-            "CE Vega L": ce.get("greeks", {}).get("vega"),
-
             "PE IV L": pe.get("implied_volatility"),
-            "PE Delta L": pe.get("greeks", {}).get("delta"),
+            "CE Gamma L": ce.get("greeks", {}).get("gamma"),
             "PE Gamma L": pe.get("greeks", {}).get("gamma"),
+            "CE Delta L": ce.get("greeks", {}).get("delta"),
+            "PE Delta L": pe.get("greeks", {}).get("delta"),
+            "CE Vega L": ce.get("greeks", {}).get("vega"),
             "PE Vega L": pe.get("greeks", {}).get("vega"),
         })
 
-    live_df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+    live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    # ---- LIVE MAX PAIN (MATCHES COLLECTOR) ----
-    A, B = live_df["CE LTP"], live_df["CE OI"]
-    G, L, M = live_df["Strike"], live_df["PE OI"], live_df["PE LTP"]
+    # ---- LIVE MAX PAIN (IDENTICAL FORMULA, ÷100) ----
+    A, B = live["CE LTP"], live["CE OI"]
+    G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
-    live_df["MP_live"] = [
-        int((
+    live["MP_live"] = [
+        int(((
             -sum(A[i:] * B[i:])
             + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
             - sum(M[:i] * L[:i])
             + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        ) / 10000 / 10)
-        for i in range(len(live_df))
+        ) / 10000) / 100)
+        for i in range(len(live))
     ]
 
-    final = final.merge(live_df, on="Strike", how="inner")
+    final = final.merge(live, on="Strike", how="inner")
 
     final[f"MP ({now})"] = final["MP_live"]
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
 
-    # ΔΔ MP (slope)
     final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"] - final[f"Δ MP (Live − {t1})"].shift(1)
 
-    # IV + GREEKS Δ
-    final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"])    * FACTOR
-    final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"])    * FACTOR
+    # ---- GREEKS / IV Δ (LIVE − T1) ----
+    final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"]) * FACTOR
+    final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"]) * FACTOR
     final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
     final["PE Gamma Δ"] = (final["PE Gamma L"] - final["PE_Gamma_T1"]) * FACTOR
     final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
     final["PE Delta Δ"] = (final["PE Delta L"] - final["PE_Delta_T1"]) * FACTOR
-    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"])  * FACTOR
-    final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"])  * FACTOR
+    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"]) * FACTOR
+    final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"]) * FACTOR
 
 # =================================================
-# FORCE INTEGER FOR ALL MAX PAIN COLUMNS
-# =================================================
-for c in final.columns:
-    if "MP" in c:   # catches MP(now), MP(t1), MP(t2), Δ MP, ΔΔ MP
-        final[c] = pd.to_numeric(final[c], errors="coerce").fillna(0).astype(int)
-
-# =================================================
-# ROUND IV & GREEKS TO 1 DECIMAL
-# =================================================
-# =================================================
-# FORMAT OUTPUT (MP = INT, GREEKS/IV = 1 DECIMAL)
-# =================================================
-
-
-
-# =================================================
-# FINAL VIEW
+# FINAL COLUMN ORDER
 # =================================================
 cols = [
     "Strike",
@@ -230,48 +210,43 @@ cols = [
     "CE Vega Δ","PE Vega Δ",
 ]
 
-
+final = final[cols].copy()
 
 # =================================================
-# STYLING
+# FORMATTING (IMPORTANT)
 # =================================================
-min_mp_strike = final.loc[final[f"MP ({now})"].idxmin(), "Strike"]
+mp_cols = [c for c in final.columns if "MP" in c]
+for c in mp_cols:
+    final[c] = final[c].astype("Int64")
+
+greek_cols = [c for c in final.columns if "Δ" in c and "MP" not in c]
+for c in greek_cols:
+    final[c] = final[c].round(1)
+
+# =================================================
+# HIGHLIGHT MIN LIVE MP
+# =================================================
+min_strike = final.loc[final[f"MP ({now})"].idxmin(), "Strike"]
 
 def highlight(row):
-    styles = []
-    for col in final.columns:
-        if row["Strike"] == min_mp_strike:
-            styles.append("background-color:#8B0000;color:white")
-        else:
-            styles.append("")
-    return styles
+    return [
+        "background-color:#8B0000;color:white" if row["Strike"] == min_strike else ""
+        for _ in row
+    ]
 
-styled = final.style.apply(highlight, axis=1)
-
-
-for c in final.columns:
-
-    # ---- Max Pain columns ----
-    if "MP" in c:
-        final[c] = pd.to_numeric(final[c], errors="coerce").fillna(0).astype(int)
-
-    # ---- Greeks & IV columns ----
-    elif "IV" in c or "Delta" in c or "Gamma" in c or "Vega" in c:
-        final[c] = pd.to_numeric(final[c], errors="coerce").round(1)
-
+freeze_upto = final.columns.tolist().index("ΔΔ MP") + 1
 
 st.dataframe(
-    styled,
+    final.style.apply(highlight, axis=1),
     use_container_width=True,
     height=750,
     column_config={
-        c: st.column_config.NumberColumn(c, pinned=True)
-        for c in final.columns[:5]  # freeze till ΔΔ MP
+        c: st.column_config.NumberColumn(c, pinned=(i < freeze_upto))
+        for i, c in enumerate(final.columns)
     },
 )
 
 st.caption(
-    "Strike window identical to collector | "
-    "Δ = Live − T1 | IV & Greeks ×10000 | "
-    "Red row = Minimum Live Max Pain"
+    "25 below + 26 above | MP ÷100 | Greeks ×10000 | "
+    "Δ = Live − T1 | ΔΔ = strike slope | Red = Min Live MP"
 )
