@@ -205,6 +205,14 @@ for c in final.columns:
         final[c] = pd.to_numeric(final[c], errors="coerce").fillna(0).astype(int)
 
 # =================================================
+# ROUND IV & GREEKS TO 1 DECIMAL
+# =================================================
+for c in final.columns:
+    if any(k in c for k in ["IV", "Delta", "Gamma", "Vega"]):
+        final[c] = pd.to_numeric(final[c], errors="coerce").round(1)
+
+
+# =================================================
 # FINAL VIEW
 # =================================================
 cols = [
