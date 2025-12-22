@@ -25,26 +25,20 @@ def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
 
-@st.cache_data(ttl=10)
-def get_yf_index_price(symbol):
+@st.cache_data(ttl=2)
+def get_dhan_index_price(security_id):
     try:
-        t = yf.Ticker(symbol)
-
-        # 1️⃣ Fast path
-        price = t.fast_info.get("last_price")
-        if price:
-            return int(price)
-
-        # 2️⃣ Reliable fallback
-        hist = t.history(period="1d", interval="1m")
-        if not hist.empty:
-            return int(hist["Close"].iloc[-1])
-
+        r = requests.post(
+            "https://api.dhan.co/v2/marketfeed/ltp",
+            headers=HEADERS,
+            json={"NSE_IDX": [security_id]},
+            timeout=5,
+        )
+        if r.status_code == 200:
+            return int(r.json()["data"][str(security_id)]["ltp"])
     except Exception:
         pass
-
     return None
-
 
 
 FACTOR = 10000
