@@ -38,6 +38,12 @@ def get_yahoo_price(index_name):
     except Exception:
         return None
 
+def compute_pcr_from_df(d):
+    return (
+        d["put_oi"].sum() / d["call_oi"].sum() if d["call_oi"].sum() else None,
+        d["put_vol"].sum() / d["call_vol"].sum() if d["call_vol"].sum() else None,
+    )
+
 
 FACTOR = 10000
 
@@ -94,6 +100,38 @@ df = df[df["Strike"].isin(STRIKES)]
 times = sorted(df["timestamp"].unique(), reverse=True)
 t1 = st.selectbox("Time-1 (Latest)", times, 0)
 t2 = st.selectbox("Time-2 (Previous)", times, 1)
+
+
+# =================================================
+# PCR FROM CSV SNAPSHOTS (COMPARE VIEW)
+# =================================================
+pcr_t1_oi, pcr_t1_vol = compute_pcr_from_df(
+    df[df["timestamp"] == t1]
+)
+
+pcr_t2_oi, pcr_t2_vol = compute_pcr_from_df(
+    df[df["timestamp"] == t2]
+)
+
+# =================================================
+# PCR TABLE (LIVE vs T1 vs T2)
+# =================================================
+pcr_table = pd.DataFrame(
+    {
+        "Live": [None, None],   # filled later if you add live PCR
+        t1: [pcr_t1_oi, pcr_t1_vol],
+        t2: [pcr_t2_oi, pcr_t2_vol],
+    },
+    index=["PCR OI", "PCR Volume"],
+)
+
+pcr_table = pcr_table.applymap(
+    lambda x: f"{x:.3f}" if pd.notna(x) else "NA"
+)
+
+st.subheader(f"{UNDERLYING} PCR Snapshot")
+st.dataframe(pcr_table, use_container_width=True)
+
 
 # =================================================
 # HISTORICAL MAX PAIN
