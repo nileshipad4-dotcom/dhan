@@ -101,9 +101,8 @@ times = sorted(df["timestamp"].unique(), reverse=True)
 t1 = st.selectbox("Time-1 (Latest)", times, 0)
 t2 = st.selectbox("Time-2 (Previous)", times, 1)
 
-
 # =================================================
-# PCR FROM CSV SNAPSHOTS (COMPARE VIEW)
+# PCR FROM CSV SNAPSHOTS
 # =================================================
 pcr_t1_oi, pcr_t1_vol = compute_pcr_from_df(
     df[df["timestamp"] == t1]
@@ -114,16 +113,15 @@ pcr_t2_oi, pcr_t2_vol = compute_pcr_from_df(
 )
 
 # =================================================
-# PCR TABLE (LIVE vs T1 vs T2)
+# PCR TABLE (COMPARE VIEW)
 # =================================================
 pcr_table = pd.DataFrame(
     {
-        "Live": [None, None],   # filled later if you add live PCR
-        t1: [pcr_t1_oi, pcr_t1_vol],
-        t2: [pcr_t2_oi, pcr_t2_vol],
-    },
-    index=["PCR OI", "PCR Volume"],
-)
+        "Value": ["PCR OI", "PCR Volume"],
+        f"{t1}": [pcr_t1_oi, pcr_t1_vol],
+        f"{t2}": [pcr_t2_oi, pcr_t2_vol],
+    }
+).set_index("Value")
 
 pcr_table = pcr_table.applymap(
     lambda x: f"{x:.3f}" if pd.notna(x) else "NA"
