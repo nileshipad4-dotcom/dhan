@@ -4,6 +4,8 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
+import yfinance as yf
+
 
 # =================================================
 # PAGE CONFIG
@@ -22,6 +24,20 @@ except Exception:
 # =================================================
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
+
+@st.cache_data(ttl=15)
+def get_yahoo_price(index_name):
+    try:
+        if index_name == "NIFTY":
+            t = yf.Ticker("^NSEI")
+        else:  # BANKNIFTY
+            t = yf.Ticker("^NSEBANK")
+
+        price = t.fast_info["last_price"]
+        return int(price)
+    except Exception:
+        return None
+
 
 FACTOR = 10000
 
@@ -42,6 +58,13 @@ UNDERLYINGS = {
 }
 
 UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
+live_price = get_yahoo_price(UNDERLYING)
+
+st.sidebar.metric(
+    label=f"{UNDERLYING} Live Price (Yahoo)",
+    value=str(live_price) if live_price else "N/A"
+)
+
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
 CENTER = UNDERLYINGS[UNDERLYING]["center"]
