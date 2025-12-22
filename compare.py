@@ -38,18 +38,24 @@ def get_yahoo_price(index_name):
     except Exception:
         return None
 
-def compute_pcr_from_df(d):
-    call_oi = d["CE OI"].sum()
-    put_oi  = d["PE OI"].sum()
-
-    call_vol = d["CE Volume"].sum() if "CE Volume" in d else None
-    put_vol  = d["PE Volume"].sum() if "PE Volume" in d else None
-
+def compute_pcr(call_oi, put_oi, call_vol=None, put_vol=None):
     pcr_oi = (put_oi / call_oi) if call_oi else None
-    pcr_vol = (put_vol / call_vol) if call_vol else None
-
+    pcr_vol = None
+    if call_vol is not None and call_vol != 0:
+        pcr_vol = put_vol / call_vol
     return pcr_oi, pcr_vol
+# =================================================
+# PCR FROM CSV (T1 & T2)
+# =================================================
+def pcr_from_csv(df_snap):
+    call_oi = df_snap["CE OI"].sum()
+    put_oi = df_snap["PE OI"].sum()
+    call_vol = df_snap.get("CE Volume", pd.Series()).sum()
+    put_vol = df_snap.get("PE Volume", pd.Series()).sum()
+    return compute_pcr(call_oi, put_oi, call_vol, put_vol)
 
+pcr_t1_oi, pcr_t1_vol = pcr_from_csv(df[df["timestamp"] == t1])
+pcr_t2_oi, pcr_t2_vol = pcr_from_csv(df[df["timestamp"] == t2])
 
 
 FACTOR = 10000
@@ -107,36 +113,6 @@ df = df[df["Strike"].isin(STRIKES)]
 times = sorted(df["timestamp"].unique(), reverse=True)
 t1 = st.selectbox("Time-1 (Latest)", times, 0)
 t2 = st.selectbox("Time-2 (Previous)", times, 1)
-
-# =================================================
-# PCR FROM CSV SNAPSHOTS
-# =================================================
-pcr_t1_oi, pcr_t1_vol = compute_pcr_from_df(
-    df[df["timestamp"] == t1]
-)
-
-pcr_t2_oi, pcr_t2_vol = compute_pcr_from_df(
-    df[df["timestamp"] == t2]
-)
-
-# =================================================
-# PCR TABLE (COMPARE VIEW)
-# =================================================
-pcr_table = pd.DataFrame(
-    {
-        "Value": ["PCR OI", "PCR Volume"],
-        f"{t1}": [pcr_t1_oi, pcr_t1_vol],
-        f"{t2}": [pcr_t2_oi, pcr_t2_vol],
-    }
-).set_index("Value")
-
-pcr_table = pcr_table.applymap(
-    lambda x: f"{x:.3f}" if pd.notna(x) else "NA"
-)
-
-st.subheader(f"{UNDERLYING} PCR Snapshot")
-st.dataframe(pcr_table, use_container_width=True)
-
 
 # =================================================
 # HISTORICAL MAX PAIN
@@ -230,6 +206,40 @@ if oc:
         })
 
     live_df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+    # =================================================
+    # LIVE PCR (FROM LIVE OPTION CHAIN)
+    # =================================================
+    call_oi_live = live_df["CE OI"].sum()
+    put_oi_live = live_df["PE OI"].sum()
+
+    # Volume is not always present in Dhan OC → safe fallback
+    call_vol_live = live_df.get("CE Volume", pd.Series()).sum()
+    put_vol_live = live_df.get("PE Volume", pd.Series()).sum()
+
+    pcr_live_oi, pcr_live_vol = compute_pcr(
+    call_oi_live, put_oi_live, call_vol_live, put_vol_live
+    )
+
+# =================================================
+# PCR TABLE (LIVE vs T1 vs T2)
+# =================================================
+pcr_table = pd.DataFrame(
+    {
+        "Live": [pcr_live_oi, pcr_live_vol],
+        t1: [pcr_t1_oi, pcr_t1_vol],
+        t2: [pcr_t2_oi, pcr_t2_vol],
+    },
+    index=["PCR (OI)", "PCR (Volume)"],
+)
+
+st.subheader("📊 Put–Call Ratio Snapshot")
+st.dataframe(
+    pcr_table.applymap(
+        lambda x: f"{x:.3f}" if pd.notna(x) else "NA"
+    ),
+    use_container_width=True
+)
+
 
     # ---- LIVE MAX PAIN (MATCHES COLLECTOR) ----
     A, B = live_df["CE LTP"], live_df["CE OI"]
