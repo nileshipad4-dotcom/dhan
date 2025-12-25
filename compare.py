@@ -30,7 +30,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2NjAyODg0LCJpYXQiOjE3NjY1MTY0ODQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.1qxa65JbMKt01Fo1K0-ytw7Y9PKpVnBJ1fIRBWGPG7-fA9A0h0CIpIMI_gMBsIAwoDJ0A-41Nw36vqiwxCb3xQ",
+    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY2Nzg0ODU1LCJpYXQiOjE3NjY2OTg0NTUsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.5CCJm6TwcTfaCIQ1RIsea2Iyn9uyKv2Xa-Mrn4C1Ad_IXp1ZfX3jmlFbSRUqdM7JZDCg2u5FUY0ZY8CrBIXLrg",
     "Content-Type": "application/json",
 }
 
