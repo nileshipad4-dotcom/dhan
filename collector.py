@@ -21,8 +21,27 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+
+
 DATA_DIR = "data"
+
+# Ensure data directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# Ensure base CSV files exist with headers
+BASE_COLUMNS = [
+    "Strike",
+    "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
+    "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega",
+    "timestamp",
+    "Max Pain",
+]
+
+for sym in ["nifty", "banknifty"]:
+    path = os.path.join(DATA_DIR, f"{sym}.csv")
+    if not os.path.exists(path):
+        pd.DataFrame(columns=BASE_COLUMNS).to_csv(path, index=False)
+
 
 # ================= API =================
 def get_expiries(scrip, seg):
