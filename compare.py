@@ -11,7 +11,7 @@ st.title("📊 NIFTY / BANKNIFTY – Max Pain + Greeks Δ")
 
 try:
     from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=60_000, key="refresh")
+    st_autorefresh(interval=360_000, key="refresh")
 except Exception:
     pass
 
