@@ -1,5 +1,4 @@
 
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -34,7 +33,6 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-
 UNDERLYINGS = {
     "NIFTY": {"scrip": 13, "seg": "IDX_I", "center": 26000, "security_id": 256265},
     "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "center": 60000, "security_id": 260105},
@@ -62,7 +60,10 @@ CENTER = UNDERLYINGS[UNDERLYING]["center"]
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
 live_price = get_index_price(UNDERLYINGS[UNDERLYING]["security_id"])
-st.sidebar.metric(f"{UNDERLYING} Live Price", f"{int(live_price)}" if live_price else "N/A")
+st.sidebar.metric(
+    f"{UNDERLYING} Live Price",
+    f"{int(live_price)}" if live_price else "N/A",
+)
 
 # =================================================
 # LOAD CSV
@@ -70,7 +71,7 @@ st.sidebar.metric(f"{UNDERLYING} Live Price", f"{int(live_price)}" if live_price
 df = pd.read_csv(CSV_PATH)
 df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
 df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
-df["timestamp"] = df["timestamp"].astype(str).str[-5:]
+df["timestamp"] = df["timestamp"].astype(str).str[-5:]  # HH:MM
 
 # =================================================
 # STRIKE WINDOW
@@ -83,7 +84,7 @@ STRIKES = set(
 df = df[df["Strike"].isin(STRIKES)]
 
 # =================================================
-# TIME SELECTION
+# TIME SELECTION (HH:MM)
 # =================================================
 times = sorted(df["timestamp"].unique(), reverse=True)
 t1 = st.selectbox("Time-1 (Latest)", times, 0)
@@ -101,7 +102,7 @@ final = pd.DataFrame({
     f"MP ({t2})": mp_t2.reindex(mp_t1.index).values,
 })
 
-final["Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
+final[f"Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
 # =================================================
 # LIVE OPTION CHAIN
@@ -109,21 +110,28 @@ final["Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 @st.cache_data(ttl=30)
 def fetch_live_oc():
     cfg = UNDERLYINGS[UNDERLYING]
+
     exp = requests.post(
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
         json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
     ).json().get("data", [])
+
     if not exp:
         return None
+
     return requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
-        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"], "Expiry": exp[0]},
+        json={
+            "UnderlyingScrip": cfg["scrip"],
+            "UnderlyingSeg": cfg["seg"],
+            "Expiry": exp[0],
+        },
     ).json().get("data", {}).get("oc")
 
 oc = fetch_live_oc()
-now = ist_hhmm()
+now = ist_hhmm()  # HH:MM
 
 if oc:
     rows = []
@@ -152,21 +160,22 @@ if oc:
     ]
 
     final = final.merge(live[["Strike", "MP_live"]], on="Strike")
+
     final[f"MP ({now})"] = final["MP_live"]
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"].diff()
 
 # =================================================
-# FINAL VIEW — NO DECIMALS
+# FINAL VIEW — ORDERED & INTEGER
 # =================================================
 cols = [
     "Strike",
     f"MP ({now})",
     f"MP ({t1})",
-    f"Δ MP (Live − {t1})",
-    "ΔΔ MP",
     f"MP ({t2})",
-    "Δ MP (T1 − T2)",
+    f"Δ MP (Live − {t1})",
+    f"Δ MP (T1 − T2)",
+    "ΔΔ MP",
 ]
 
 final = final[cols].apply(pd.to_numeric, errors="coerce")
@@ -178,7 +187,11 @@ final = final.round(0).astype("Int64")
 min_strike = final.loc[final[f"MP ({now})"].idxmin(), "Strike"]
 
 def highlight(row):
-    return ["background-color:#8B0000;color:white" if row["Strike"] == min_strike else "" for _ in row]
+    return [
+        "background-color:#8B0000;color:white"
+        if row["Strike"] == min_strike else ""
+        for _ in row
+    ]
 
 freeze_upto = final.columns.tolist().index("ΔΔ MP") + 1
 
@@ -192,4 +205,6 @@ st.dataframe(
     },
 )
 
-st.caption("Max Pain only | No decimals | Red = Min Live MP")
+st.caption(
+    "HH:MM timestamps | Live → T1 → T2 → Δ → ΔΔ | Red = Minimum Live Max Pain"
+)
