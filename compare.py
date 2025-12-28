@@ -54,7 +54,7 @@ UNDERLYINGS = {
     "BANKNIFTY": {
         "scrip": 25,
         "seg": "IDX_I",
-        "center": 60000,
+        "center": 59000,
         "security_id": 260105,
         "csv": "data/banknifty.csv",
         "yahoo": "^NSEBANK",
