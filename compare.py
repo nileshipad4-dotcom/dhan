@@ -1,7 +1,4 @@
 
-
-
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -33,6 +30,9 @@ def get_yahoo_price(symbol):
         return None
     return float(data["Close"].iloc[-1])
 
+def fallback_spot(strikes):
+    return strikes[len(strikes) // 2]
+
 # =================================================
 # CONFIG
 # =================================================
@@ -43,6 +43,8 @@ HEADERS = {
     "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MDQyOTkyLCJpYXQiOjE3NjY5NTY1OTIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.ZCr0-AzvUPMziokEvu2Gi0IX2_X8sA3LYpB7svs49p48Wz3Maf8_y60Sgu43157pGc7pL4x-s98MUjO9X6PKSA",
     "Content-Type": "application/json",
 }
+
+
 
 UNDERLYINGS = {
     "NIFTY": {
@@ -84,7 +86,7 @@ def fetch_live_oc(cfg):
     ).json().get("data", {}).get("oc")
 
 # =================================================
-# BUILD TABLE (LIVE PRICE BASED STRIKES)
+# BUILD TABLE
 # =================================================
 def build_table(cfg, spot_price):
     df = pd.read_csv(cfg["csv"])
@@ -94,10 +96,11 @@ def build_table(cfg, spot_price):
 
     all_strikes = sorted(df["Strike"].dropna().unique())
 
-    # 🔥 LIVE PRICE BASED STRIKE WINDOW
+    spot = spot_price if spot_price and not pd.isna(spot_price) else fallback_spot(all_strikes)
+
     STRIKES = set(
-        [s for s in all_strikes if s <= spot_price][-25:]
-        + [s for s in all_strikes if s > spot_price][:26]
+        [s for s in all_strikes if s <= spot][-25:]
+        + [s for s in all_strikes if s > spot][:26]
     )
 
     df = df[df["Strike"].isin(STRIKES)]
@@ -166,17 +169,17 @@ def build_table(cfg, spot_price):
     return final, now
 
 # =================================================
-# DISPLAY (2 COLUMNS)
+# DISPLAY
 # =================================================
 col1, col2 = st.columns(2)
 
 for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     cfg = UNDERLYINGS[name]
-    price = get_yahoo_price(cfg["yahoo"])
-    table, now = build_table(cfg, price)
+    spot_price = get_yahoo_price(cfg["yahoo"])
+    table, now = build_table(cfg, spot_price)
 
     with col:
-        st.subheader(f"{name}  |  Live Price: {int(price) if price else 'N/A'}")
+        st.subheader(f"{name} | Live Price: {int(spot_price) if spot_price else 'N/A'}")
 
         min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
