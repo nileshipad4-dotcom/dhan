@@ -3,6 +3,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+import yfinance as yf
 from datetime import datetime, timedelta
 
 # =================================================
@@ -24,6 +25,23 @@ def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
 # =================================================
+# YAHOO FINANCE LIVE PRICE
+# =================================================
+@st.cache_data(ttl=30)
+def get_yahoo_price(symbol):
+    ticker = yf.Ticker(symbol)
+    data = ticker.history(period="1d", interval="1m")
+    if data.empty:
+        return None
+    return round(data["Close"].iloc[-1], 2)
+
+# Yahoo symbols
+YAHOO_SYMBOLS = {
+    "NIFTY": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
+}
+
+# =================================================
 # CONFIG
 # =================================================
 API_BASE = "https://api.dhan.co/v2"
@@ -33,13 +51,15 @@ HEADERS = {
     "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MDQyOTkyLCJpYXQiOjE3NjY5NTY1OTIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.ZCr0-AzvUPMziokEvu2Gi0IX2_X8sA3LYpB7svs49p48Wz3Maf8_y60Sgu43157pGc7pL4x-s98MUjO9X6PKSA",
     "Content-Type": "application/json",
 }
+
+
 UNDERLYINGS = {
     "NIFTY": {"scrip": 13, "seg": "IDX_I", "center": 26000, "security_id": 256265},
     "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "center": 60000, "security_id": 260105},
 }
 
 # =================================================
-# LIVE INDEX PRICE
+# DHAN LIVE INDEX PRICE (unchanged)
 # =================================================
 @st.cache_data(ttl=5)
 def get_index_price(security_id):
@@ -59,10 +79,18 @@ UNDERLYING = st.sidebar.selectbox("Index", list(UNDERLYINGS.keys()))
 CENTER = UNDERLYINGS[UNDERLYING]["center"]
 CSV_PATH = f"data/{UNDERLYING.lower()}.csv"
 
+# --- DHAN PRICE (existing) ---
 live_price = get_index_price(UNDERLYINGS[UNDERLYING]["security_id"])
 st.sidebar.metric(
-    f"{UNDERLYING} Live Price",
+    f"{UNDERLYING} Live Price (Dhan)",
     f"{int(live_price)}" if live_price else "N/A",
+)
+
+# --- YAHOO PRICE (added) ---
+yahoo_price = get_yahoo_price(YAHOO_SYMBOLS[UNDERLYING])
+st.sidebar.metric(
+    f"{UNDERLYING} Live Price (Yahoo)",
+    f"{yahoo_price}" if yahoo_price else "N/A",
 )
 
 # =================================================
@@ -105,7 +133,7 @@ final = pd.DataFrame({
 final[f"Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
 # =================================================
-# LIVE OPTION CHAIN
+# LIVE OPTION CHAIN (unchanged)
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc():
@@ -164,7 +192,7 @@ if oc:
     final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"].diff()
 
 # =================================================
-# FINAL VIEW (ORDER + INTEGER)
+# FINAL VIEW
 # =================================================
 cols = [
     "Strike",
@@ -178,8 +206,6 @@ cols = [
 
 final = final[cols].apply(pd.to_numeric, errors="coerce")
 final = final.round(0).astype("Int64")
-
-# 🔥 THIS LINE REMOVES THE EXTRA COLUMN PERMANENTLY
 final = final.reset_index(drop=True)
 
 # =================================================
@@ -207,5 +233,7 @@ st.dataframe(
 )
 
 st.caption(
-    "HH:MM timestamps | Live → T1 → T2 → Δ → ΔΔ | Red = Minimum Live Max Pain"
+    "HH:MM timestamps | Live → T1 → T2 → Δ → ΔΔ | "
+    "Sidebar shows Dhan + Yahoo live prices"
 )
+
