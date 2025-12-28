@@ -1,3 +1,8 @@
+HEADERS = {
+    "client-id": "1102712380",
+    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MDQyOTkyLCJpYXQiOjE3NjY5NTY1OTIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.ZCr0-AzvUPMziokEvu2Gi0IX2_X8sA3LYpB7svs49p48Wz3Maf8_y60Sgu43157pGc7pL4x-s98MUjO9X6PKSA",
+    "Content-Type": "application/json",
+}
 
 import streamlit as st
 import pandas as pd
@@ -29,7 +34,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MDQyOTkyLCJpYXQiOjE3NjY5NTY1OTIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.ZCr0-AzvUPMziokEvu2Gi0IX2_X8sA3LYpB7svs49p48Wz3Maf8_y60Sgu43157pGc7pL4x-s98MUjO9X6PKSA",
+    "access-token": "YOUR_TOKEN",
     "Content-Type": "application/json",
 }
 
@@ -84,7 +89,7 @@ STRIKES = set(
 df = df[df["Strike"].isin(STRIKES)]
 
 # =================================================
-# TIME SELECTION (HH:MM)
+# TIME SELECTION
 # =================================================
 times = sorted(df["timestamp"].unique(), reverse=True)
 t1 = st.selectbox("Time-1 (Latest)", times, 0)
@@ -110,7 +115,6 @@ final[f"Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 @st.cache_data(ttl=30)
 def fetch_live_oc():
     cfg = UNDERLYINGS[UNDERLYING]
-
     exp = requests.post(
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
@@ -131,7 +135,7 @@ def fetch_live_oc():
     ).json().get("data", {}).get("oc")
 
 oc = fetch_live_oc()
-now = ist_hhmm()  # HH:MM
+now = ist_hhmm()
 
 if oc:
     rows = []
@@ -166,7 +170,7 @@ if oc:
     final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"].diff()
 
 # =================================================
-# FINAL VIEW — ORDERED & INTEGER
+# FINAL VIEW (ORDER + INTEGER)
 # =================================================
 cols = [
     "Strike",
@@ -199,6 +203,7 @@ st.dataframe(
     final.style.apply(highlight, axis=1),
     use_container_width=True,
     height=750,
+    hide_index=True,   # ✅ removes extra column
     column_config={
         c: st.column_config.NumberColumn(c, pinned=(i < freeze_upto))
         for i, c in enumerate(final.columns)
