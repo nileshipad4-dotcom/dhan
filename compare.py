@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 # PAGE CONFIG
 # =================================================
 st.set_page_config(layout="wide")
-st.title("📊 NIFTY / BANKNIFTY – Max Pain + Greeks Δ")
+st.title("📊 NIFTY / BANKNIFTY – Max Pain")
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -20,8 +20,6 @@ except Exception:
 # =================================================
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
-
-FACTOR = 10000
 
 # =================================================
 # CONFIG
@@ -119,27 +117,6 @@ final = pd.DataFrame({
 final["Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
 # =================================================
-# T1 BASE (IV + GREEKS)
-# =================================================
-t1_base = (
-    df[df["timestamp"] == t1]
-    .groupby("Strike", as_index=False)
-    .mean(numeric_only=True)
-    .rename(columns={
-        "CE IV": "CE_IV_T1",
-        "PE IV": "PE_IV_T1",
-        "CE Gamma": "CE_Gamma_T1",
-        "PE Gamma": "PE_Gamma_T1",
-        "CE Delta": "CE_Delta_T1",
-        "PE Delta": "PE_Delta_T1",
-        "CE Vega": "CE_Vega_T1",
-        "PE Vega": "PE_Vega_T1",
-    })
-)
-
-final = final.merge(t1_base, on="Strike", how="inner")
-
-# =================================================
 # LIVE OPTION CHAIN
 # =================================================
 @st.cache_data(ttl=30)
@@ -181,19 +158,11 @@ if oc:
             "CE OI": ce.get("oi", 0),
             "PE LTP": pe.get("last_price", 0),
             "PE OI": pe.get("oi", 0),
-            "CE IV L": ce.get("implied_volatility"),
-            "PE IV L": pe.get("implied_volatility"),
-            "CE Gamma L": ce.get("greeks", {}).get("gamma"),
-            "PE Gamma L": pe.get("greeks", {}).get("gamma"),
-            "CE Delta L": ce.get("greeks", {}).get("delta"),
-            "PE Delta L": pe.get("greeks", {}).get("delta"),
-            "CE Vega L": ce.get("greeks", {}).get("vega"),
-            "PE Vega L": pe.get("greeks", {}).get("vega"),
         })
 
     live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    # LIVE MAX PAIN
+    # LIVE MAX PAIN CALCULATION
     A, B = live["CE LTP"], live["CE OI"]
     G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
@@ -206,21 +175,11 @@ if oc:
         for i in range(len(live))
     ]
 
-    final = final.merge(live, on="Strike", how="inner")
+    final = final.merge(live[["Strike", "MP_live"]], on="Strike", how="inner")
 
     final[f"MP ({now})"] = final["MP_live"]
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
-    final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"] - final[f"Δ MP (Live − {t1})"].shift(1)
-
-    # GREEKS Δ
-    final["CE IV Δ"]    = (final["CE IV L"]    - final["CE_IV_T1"]) * FACTOR
-    final["PE IV Δ"]    = (final["PE IV L"]    - final["PE_IV_T1"]) * FACTOR
-    final["CE Gamma Δ"] = (final["CE Gamma L"] - final["CE_Gamma_T1"]) * FACTOR
-    final["PE Gamma Δ"] = (final["PE Gamma L"] - final["PE_Gamma_T1"]) * FACTOR
-    final["CE Delta Δ"] = (final["CE Delta L"] - final["CE_Delta_T1"]) * FACTOR
-    final["PE Delta Δ"] = (final["PE Delta L"] - final["PE_Delta_T1"]) * FACTOR
-    final["CE Vega Δ"]  = (final["CE Vega L"]  - final["CE_Vega_T1"]) * FACTOR
-    final["PE Vega Δ"]  = (final["PE Vega L"]  - final["PE_Vega_T1"]) * FACTOR
+    final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"].diff()
 
 # =================================================
 # FINAL VIEW
@@ -233,19 +192,9 @@ cols = [
     "ΔΔ MP",
     f"MP ({t2})",
     "Δ MP (T1 − T2)",
-    "CE IV Δ","PE IV Δ",
-    "CE Gamma Δ","PE Gamma Δ",
-    "CE Delta Δ","PE Delta Δ",
-    "CE Vega Δ","PE Vega Δ",
 ]
 
-final = final[cols].apply(pd.to_numeric, errors="coerce")
-
-mp_cols = [c for c in final.columns if "MP" in c]
-final[mp_cols] = final[mp_cols].round(0)
-
-greek_cols = [c for c in final.columns if "Δ" in c and "MP" not in c]
-final[greek_cols] = final[greek_cols].round(1)
+final = final[cols].apply(pd.to_numeric, errors="coerce").round(0)
 
 # =================================================
 # STYLING
@@ -254,7 +203,8 @@ min_strike = final.loc[final[f"MP ({now})"].idxmin(), "Strike"]
 
 def highlight(row):
     return [
-        "background-color:#8B0000;color:white" if row["Strike"] == min_strike else ""
+        "background-color:#8B0000;color:white"
+        if row["Strike"] == min_strike else ""
         for _ in row
     ]
 
@@ -271,6 +221,6 @@ st.dataframe(
 )
 
 st.caption(
-    "25 below + 26 above | MP ÷100 | Greeks ×10000 | "
+    "25 below + 26 above | MP ÷100 | "
     "Δ = Live − T1 | ΔΔ = strike slope | Red = Min Live MP"
 )
