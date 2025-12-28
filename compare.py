@@ -1,4 +1,5 @@
 
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -25,13 +26,18 @@ def ist_hhmm():
 
 @st.cache_data(ttl=30)
 def get_yahoo_price(symbol):
-    data = yf.Ticker(symbol).history(period="1d", interval="1m")
-    if data.empty:
+    try:
+        data = yf.Ticker(symbol).history(period="1d", interval="1m")
+        if data.empty:
+            return None
+        return float(data["Close"].iloc[-1])
+    except Exception:
         return None
-    return float(data["Close"].iloc[-1])
 
-def fallback_spot(strikes):
-    return strikes[len(strikes) // 2]
+def safe_spot(all_strikes, spot):
+    if spot is None or pd.isna(spot):
+        return all_strikes[len(all_strikes) // 2]
+    return spot
 
 # =================================================
 # CONFIG
@@ -43,8 +49,6 @@ HEADERS = {
     "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MDQyOTkyLCJpYXQiOjE3NjY5NTY1OTIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.ZCr0-AzvUPMziokEvu2Gi0IX2_X8sA3LYpB7svs49p48Wz3Maf8_y60Sgu43157pGc7pL4x-s98MUjO9X6PKSA",
     "Content-Type": "application/json",
 }
-
-
 
 UNDERLYINGS = {
     "NIFTY": {
@@ -66,37 +70,48 @@ UNDERLYINGS = {
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc(cfg):
-    exp = requests.post(
-        f"{API_BASE}/optionchain/expirylist",
-        headers=HEADERS,
-        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
-    ).json().get("data", [])
+    try:
+        exp = requests.post(
+            f"{API_BASE}/optionchain/expirylist",
+            headers=HEADERS,
+            json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
+            timeout=5,
+        ).json().get("data", [])
 
-    if not exp:
+        if not exp:
+            return None
+
+        return requests.post(
+            f"{API_BASE}/optionchain",
+            headers=HEADERS,
+            json={
+                "UnderlyingScrip": cfg["scrip"],
+                "UnderlyingSeg": cfg["seg"],
+                "Expiry": exp[0],
+            },
+            timeout=5,
+        ).json().get("data", {}).get("oc")
+    except Exception:
         return None
 
-    return requests.post(
-        f"{API_BASE}/optionchain",
-        headers=HEADERS,
-        json={
-            "UnderlyingScrip": cfg["scrip"],
-            "UnderlyingSeg": cfg["seg"],
-            "Expiry": exp[0],
-        },
-    ).json().get("data", {}).get("oc")
-
 # =================================================
-# BUILD TABLE
+# BUILD TABLE (BULLETPROOF)
 # =================================================
 def build_table(cfg, spot_price):
     df = pd.read_csv(cfg["csv"])
+
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
-    all_strikes = sorted(df["Strike"].dropna().unique())
+    df = df.dropna(subset=["Strike", "Max Pain"])
 
-    spot = spot_price if spot_price and not pd.isna(spot_price) else fallback_spot(all_strikes)
+    all_strikes = sorted(df["Strike"].unique())
+
+    if len(all_strikes) == 0:
+        return pd.DataFrame(), ist_hhmm()
+
+    spot = safe_spot(all_strikes, spot_price)
 
     STRIKES = set(
         [s for s in all_strikes if s <= spot][-25:]
@@ -106,7 +121,9 @@ def build_table(cfg, spot_price):
     df = df[df["Strike"].isin(STRIKES)]
 
     times = sorted(df["timestamp"].unique(), reverse=True)
-    t1, t2 = times[0], times[1]
+
+    t1 = times[0]
+    t2 = times[1] if len(times) > 1 else times[0]
 
     mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
     mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
@@ -134,7 +151,7 @@ def build_table(cfg, spot_price):
                 "PE OI": v.get("pe", {}).get("oi", 0),
             })
 
-        live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
+        live = pd.DataFrame(rows).sort_values("Strike")
 
         A, B = live["CE LTP"], live["CE OI"]
         G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
@@ -148,7 +165,7 @@ def build_table(cfg, spot_price):
             for i in range(len(live))
         ]
 
-        final = final.merge(live[["Strike", "MP_live"]], on="Strike")
+        final = final.merge(live[["Strike", "MP_live"]], on="Strike", how="left")
         final[f"MP ({now})"] = final["MP_live"]
         final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
         final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"].diff()
@@ -180,6 +197,10 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
 
     with col:
         st.subheader(f"{name} | Live Price: {int(spot_price) if spot_price else 'N/A'}")
+
+        if table.empty:
+            st.warning("No data available")
+            continue
 
         min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
