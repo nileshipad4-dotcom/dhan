@@ -1,5 +1,4 @@
 
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -7,7 +6,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 
 FACTOR = 1000
-STRIKE_RANGE = 10
+STRIKE_RANGE = 10  # used only for IV tables (unchanged)
 
 # =================================================
 # PAGE CONFIG
@@ -71,12 +70,14 @@ CFG = {
         "seg": "IDX_I",
         "csv": "data/nifty.csv",
         "yahoo": "^NSEI",
+        "center": 26000,
     },
     "BANKNIFTY": {
         "scrip": 25,
         "seg": "IDX_I",
         "csv": "data/banknifty.csv",
         "yahoo": "^NSEBANK",
+        "center": 60000,
     },
 }
 
@@ -124,17 +125,24 @@ def fetch_live_oc(cfg):
     ).json().get("data", {}).get("oc")
 
 # =================================================
-# MAX PAIN TABLE
+# MAX PAIN TABLE (FIXED TO MATCH COLLECTOR.PY)
 # =================================================
-def build_max_pain(cfg, spot):
+def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
     df = df.dropna(subset=["Strike", "Max Pain"])
 
-    strikes = sorted(df["Strike"].unique())
-    strikes = atm_strikes(strikes, spot)
+    # -------- STRIKE SET MATCHES collector.py --------
+    all_strikes = sorted(df["Strike"].unique())
+    center = cfg["center"]
+
+    below = [s for s in all_strikes if s <= center][-35:]
+    above = [s for s in all_strikes if s > center][:36]
+    strikes = sorted(set(below + above))
+    # -------------------------------------------------
+
     df = df[df["Strike"].isin(strikes)]
 
     mp1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
@@ -148,6 +156,7 @@ def build_max_pain(cfg, spot):
     })
 
     oc = fetch_live_oc(cfg)
+
     if oc:
         rows = []
         for s in strikes:
@@ -174,7 +183,7 @@ def build_max_pain(cfg, spot):
             for i in range(len(live))
         ]
 
-        final = final.merge(live[["Strike", "MP_live"]], on="Strike")
+        final = final.merge(live[["Strike", "MP_live"]], on="Strike", how="left")
         final[f"MP ({now})"] = final["MP_live"]
 
     final[f"Δ MP ({now}−{t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
@@ -187,7 +196,7 @@ def build_max_pain(cfg, spot):
     return final
 
 # =================================================
-# IV TABLE (DECIMALS FIXED)
+# IV TABLE (UNCHANGED)
 # =================================================
 def build_iv_table(cfg, spot):
     df = pd.read_csv(cfg["csv"])
@@ -196,8 +205,7 @@ def build_iv_table(cfg, spot):
     df["PE IV"] = pd.to_numeric(df["PE IV"], errors="coerce")
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
-    strikes = sorted(df["Strike"].dropna().unique())
-    strikes = atm_strikes(strikes, spot)
+    strikes = atm_strikes(sorted(df["Strike"].dropna().unique()), spot)
 
     h1 = df[df["timestamp"] == t1].groupby("Strike").mean(numeric_only=True)
     h2 = df[df["timestamp"] == t2].groupby("Strike").mean(numeric_only=True)
@@ -224,7 +232,6 @@ def build_iv_table(cfg, spot):
     iv = pd.DataFrame(rows)
     iv = iv.apply(pd.to_numeric, errors="coerce")
     iv = iv.round(0).astype("Int64")
-
     return iv
 
 # =================================================
@@ -237,8 +244,8 @@ col1, col2 = st.columns(2)
 
 for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     cfg = CFG[name]
+    table = build_max_pain(cfg)
     spot = get_yahoo_price(cfg["yahoo"])
-    table = build_max_pain(cfg, spot)
     band = get_spot_band(table["Strike"].tolist(), spot)
     min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
@@ -252,7 +259,11 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
                 return ["background-color:#00008B;color:white"] * len(row)
             return [""] * len(row)
 
-        st.dataframe(table.style.apply(highlight_mp, axis=1), use_container_width=True, height=600)
+        st.dataframe(
+            table.style.apply(highlight_mp, axis=1),
+            use_container_width=True,
+            height=600,
+        )
 
 st.divider()
 st.subheader("📌 IV COMPARISON")
@@ -273,4 +284,8 @@ for col, name in zip([col3, col4], ["NIFTY", "BANKNIFTY"]):
                 return ["background-color:#00008B;color:white"] * len(row)
             return [""] * len(row)
 
-        st.dataframe(iv.style.apply(highlight_iv, axis=1), use_container_width=True, height=600)
+        st.dataframe(
+            iv.style.apply(highlight_iv, axis=1),
+            use_container_width=True,
+            height=600,
+        )
