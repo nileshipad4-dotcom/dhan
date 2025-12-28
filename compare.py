@@ -1,4 +1,6 @@
 
+
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -34,7 +36,14 @@ def get_yahoo_price(symbol):
         return None
 
 def safe_spot(strikes, spot):
-    return spot if spot and not pd.isna(spot) else strikes[len(strikes)//2]
+    return spot if spot is not None and not pd.isna(spot) else strikes[len(strikes) // 2]
+
+def get_spot_band(strikes, spot):
+    if spot is None or pd.isna(spot):
+        return set()
+    lower = max([s for s in strikes if s <= spot], default=None)
+    upper = min([s for s in strikes if s > spot], default=None)
+    return {lower, upper}
 
 # =================================================
 # CONFIG
@@ -46,7 +55,6 @@ HEADERS = {
     "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MDQyOTkyLCJpYXQiOjE3NjY5NTY1OTIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.ZCr0-AzvUPMziokEvu2Gi0IX2_X8sA3LYpB7svs49p48Wz3Maf8_y60Sgu43157pGc7pL4x-s98MUjO9X6PKSA",
     "Content-Type": "application/json",
 }
-
 
 UNDERLYINGS = {
     "NIFTY": {
@@ -64,7 +72,7 @@ UNDERLYINGS = {
 }
 
 # =================================================
-# LOAD CSVs ONCE (for timestamp sync)
+# LOAD CSVs (for common timestamps)
 # =================================================
 df_nifty = pd.read_csv(UNDERLYINGS["NIFTY"]["csv"])
 df_bank = pd.read_csv(UNDERLYINGS["BANKNIFTY"]["csv"])
@@ -72,9 +80,6 @@ df_bank = pd.read_csv(UNDERLYINGS["BANKNIFTY"]["csv"])
 for df in (df_nifty, df_bank):
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
-# =================================================
-# COMMON TIMESTAMPS
-# =================================================
 common_times = sorted(
     set(df_nifty["timestamp"]).intersection(df_bank["timestamp"]),
     reverse=True,
@@ -85,25 +90,18 @@ if not common_times:
     st.stop()
 
 # =================================================
-# COMMON TIMESTAMP SELECTORS (TOP)
+# COMMON TIMESTAMP SELECTOR (TOP)
 # =================================================
 st.subheader("⏱ Timestamp Selection")
 
-t1 = st.selectbox(
-    "Time-1 (Latest)",
-    common_times,
-    index=0,
-)
-
+t1 = st.selectbox("Time-1 (Latest)", common_times, index=0)
 t2 = st.selectbox(
     "Time-2 (Previous)",
     common_times,
     index=1 if len(common_times) > 1 else 0,
 )
 
-st.markdown(
-    f"**Selected:**  Time-1 = `{t1}`  |  Time-2 = `{t2}`"
-)
+st.markdown(f"**Selected:**  `{t1}`  →  `{t2}`")
 
 # =================================================
 # OPTION CHAIN
@@ -143,13 +141,9 @@ def build_table(cfg, spot_price, t1, t2):
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
-
     df = df.dropna(subset=["Strike", "Max Pain"])
 
     all_strikes = sorted(df["Strike"].unique())
-    if not all_strikes:
-        return pd.DataFrame(), None
-
     spot = safe_spot(all_strikes, spot_price)
 
     STRIKES = set(
@@ -232,18 +226,16 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     with col:
         st.subheader(f"{name} | Live Price: {int(spot_price) if spot_price else 'N/A'}")
 
-        if table.empty:
-            st.warning("No data available")
-            continue
-
+        strikes = table["Strike"].tolist()
+        spot_band = get_spot_band(strikes, spot_price)
         min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
         def highlight(row):
-            return [
-                "background-color:#8B0000;color:white"
-                if row["Strike"] == min_strike else ""
-                for _ in row
-            ]
+            if row["Strike"] == min_strike:
+                return ["background-color:#8B0000;color:white"] * len(row)
+            if row["Strike"] in spot_band:
+                return ["background-color:#00008B;color:white"] * len(row)
+            return [""] * len(row)
 
         freeze_upto = table.columns.tolist().index("ΔΔ MP") + 1
 
