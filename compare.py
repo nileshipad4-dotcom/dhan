@@ -1,6 +1,7 @@
 
 
 
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -36,9 +37,7 @@ def get_yahoo_price(symbol):
         return None
 
 def safe_spot(all_strikes, spot):
-    if spot is None or pd.isna(spot):
-        return all_strikes[len(all_strikes) // 2]
-    return spot
+    return spot if spot is not None and not pd.isna(spot) else all_strikes[len(all_strikes)//2]
 
 # =================================================
 # CONFIG
@@ -97,7 +96,7 @@ def fetch_live_oc(cfg):
         return None
 
 # =================================================
-# BUILD TABLE (BULLETPROOF)
+# BUILD TABLE (WITH DROPDOWNS)
 # =================================================
 def build_table(cfg, spot_price):
     df = pd.read_csv(cfg["csv"])
@@ -109,9 +108,8 @@ def build_table(cfg, spot_price):
     df = df.dropna(subset=["Strike", "Max Pain"])
 
     all_strikes = sorted(df["Strike"].unique())
-
-    if len(all_strikes) == 0:
-        return pd.DataFrame(), ist_hhmm()
+    if not all_strikes:
+        return pd.DataFrame(), None
 
     spot = safe_spot(all_strikes, spot_price)
 
@@ -124,8 +122,19 @@ def build_table(cfg, spot_price):
 
     times = sorted(df["timestamp"].unique(), reverse=True)
 
-    t1 = times[0]
-    t2 = times[1] if len(times) > 1 else times[0]
+    t1 = st.selectbox(
+        f"{cfg['csv']} | Time-1 (Latest)",
+        times,
+        index=0,
+        key=f"{cfg['csv']}_t1",
+    )
+
+    t2 = st.selectbox(
+        f"{cfg['csv']} | Time-2 (Previous)",
+        times,
+        index=1 if len(times) > 1 else 0,
+        key=f"{cfg['csv']}_t2",
+    )
 
     mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
     mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
@@ -200,7 +209,7 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     with col:
         st.subheader(f"{name} | Live Price: {int(spot_price) if spot_price else 'N/A'}")
 
-        if table.empty:
+        if table is None or table.empty:
             st.warning("No data available")
             continue
 
