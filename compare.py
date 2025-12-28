@@ -1,3 +1,7 @@
+
+
+
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -27,7 +31,7 @@ def get_yahoo_price(symbol):
     data = yf.Ticker(symbol).history(period="1d", interval="1m")
     if data.empty:
         return None
-    return round(data["Close"].iloc[-1], 2)
+    return float(data["Close"].iloc[-1])
 
 # =================================================
 # CONFIG
@@ -44,16 +48,12 @@ UNDERLYINGS = {
     "NIFTY": {
         "scrip": 13,
         "seg": "IDX_I",
-        "center": 26000,
-        "security_id": 256265,
         "csv": "data/nifty.csv",
         "yahoo": "^NSEI",
     },
     "BANKNIFTY": {
         "scrip": 25,
         "seg": "IDX_I",
-        "center": 60000,
-        "security_id": 260105,
         "csv": "data/banknifty.csv",
         "yahoo": "^NSEBANK",
     },
@@ -84,19 +84,22 @@ def fetch_live_oc(cfg):
     ).json().get("data", {}).get("oc")
 
 # =================================================
-# MAIN LOGIC PER INDEX
+# BUILD TABLE (LIVE PRICE BASED STRIKES)
 # =================================================
-def build_table(cfg):
+def build_table(cfg, spot_price):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
     all_strikes = sorted(df["Strike"].dropna().unique())
+
+    # 🔥 LIVE PRICE BASED STRIKE WINDOW
     STRIKES = set(
-        [s for s in all_strikes if s <= cfg["center"]][-25:]
-        + [s for s in all_strikes if s > cfg["center"]][:26]
+        [s for s in all_strikes if s <= spot_price][-25:]
+        + [s for s in all_strikes if s > spot_price][:26]
     )
+
     df = df[df["Strike"].isin(STRIKES)]
 
     times = sorted(df["timestamp"].unique(), reverse=True)
@@ -170,10 +173,11 @@ col1, col2 = st.columns(2)
 for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     cfg = UNDERLYINGS[name]
     price = get_yahoo_price(cfg["yahoo"])
-    table, now = build_table(cfg)
+    table, now = build_table(cfg, price)
 
     with col:
-        st.subheader(f"{name}  |  Live Price: {price}")
+        st.subheader(f"{name}  |  Live Price: {int(price) if price else 'N/A'}")
+
         min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
         def highlight(row):
@@ -194,7 +198,3 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
                 for i, c in enumerate(table.columns)
             },
         )
-
-
-
-
