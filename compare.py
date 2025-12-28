@@ -1,4 +1,5 @@
 
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -6,13 +7,13 @@ import yfinance as yf
 from datetime import datetime, timedelta
 
 FACTOR = 1000
-STRIKE_RANGE = 10  # ±10 strikes around ATM
+STRIKE_RANGE = 10
 
 # =================================================
 # PAGE CONFIG
 # =================================================
 st.set_page_config(layout="wide")
-st.title("📊 NIFTY & BANKNIFTY – Max Pain + IV Analysis")
+st.title("📊 NIFTY & BANKNIFTY – Max Pain + IV Dashboard")
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -36,16 +37,19 @@ def get_yahoo_price(symbol):
     except Exception:
         return None
 
-def atm_strikes(all_strikes, spot, n=STRIKE_RANGE):
-    if spot is None or pd.isna(spot):
-        mid = len(all_strikes) // 2
-        return all_strikes[mid-n:mid+n+1]
-
-    atm = min(all_strikes, key=lambda x: abs(x - spot))
-    idx = all_strikes.index(atm)
-    return all_strikes[max(0, idx-n): idx+n+1]
+def atm_strikes(strikes, spot):
+    if not strikes:
+        return []
+    if spot is None:
+        mid = len(strikes) // 2
+        return strikes[mid-STRIKE_RANGE:mid+STRIKE_RANGE+1]
+    atm = min(strikes, key=lambda x: abs(x - spot))
+    idx = strikes.index(atm)
+    return strikes[max(0, idx-STRIKE_RANGE): idx+STRIKE_RANGE+1]
 
 def get_spot_band(strikes, spot):
+    if spot is None:
+        return set()
     lower = max([s for s in strikes if s <= spot], default=None)
     upper = min([s for s in strikes if s > spot], default=None)
     return {lower, upper}
@@ -60,7 +64,6 @@ HEADERS = {
     "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MDQyOTkyLCJpYXQiOjE3NjY5NTY1OTIsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.ZCr0-AzvUPMziokEvu2Gi0IX2_X8sA3LYpB7svs49p48Wz3Maf8_y60Sgu43157pGc7pL4x-s98MUjO9X6PKSA",
     "Content-Type": "application/json",
 }
-
 
 CFG = {
     "NIFTY": {
@@ -92,10 +95,8 @@ common_times = sorted(
 )
 
 st.subheader("⏱ Timestamp Selection")
-
 t1 = st.selectbox("Time-1 (Latest)", common_times, index=0)
 t2 = st.selectbox("Time-2 (Previous)", common_times, index=1 if len(common_times) > 1 else 0)
-
 now = ist_hhmm()
 
 # =================================================
@@ -132,23 +133,21 @@ def build_max_pain(cfg, spot):
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
     df = df.dropna(subset=["Strike", "Max Pain"])
 
-    all_strikes = sorted(df["Strike"].unique())
-    strikes = atm_strikes(all_strikes, spot)
-
+    strikes = sorted(df["Strike"].unique())
+    strikes = atm_strikes(strikes, spot)
     df = df[df["Strike"].isin(strikes)]
 
-    mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
-    mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
+    mp1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
+    mp2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
 
     final = pd.DataFrame({
-        "Strike": mp_t1.index,
+        "Strike": mp1.index,
         f"MP ({now})": None,
-        f"MP ({t1})": mp_t1.values,
-        f"MP ({t2})": mp_t2.reindex(mp_t1.index).values,
+        f"MP ({t1})": mp1.values,
+        f"MP ({t2})": mp2.reindex(mp1.index).values,
     })
 
     oc = fetch_live_oc(cfg)
-
     if oc:
         rows = []
         for s in strikes:
@@ -188,7 +187,7 @@ def build_max_pain(cfg, spot):
     return final
 
 # =================================================
-# IV TABLE
+# IV TABLE (DECIMALS FIXED)
 # =================================================
 def build_iv_table(cfg, spot):
     df = pd.read_csv(cfg["csv"])
@@ -197,8 +196,8 @@ def build_iv_table(cfg, spot):
     df["PE IV"] = pd.to_numeric(df["PE IV"], errors="coerce")
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
-    all_strikes = sorted(df["Strike"].dropna().unique())
-    strikes = atm_strikes(all_strikes, spot)
+    strikes = sorted(df["Strike"].dropna().unique())
+    strikes = atm_strikes(strikes, spot)
 
     h1 = df[df["timestamp"] == t1].groupby("Strike").mean(numeric_only=True)
     h2 = df[df["timestamp"] == t2].groupby("Strike").mean(numeric_only=True)
@@ -216,13 +215,17 @@ def build_iv_table(cfg, spot):
 
         rows.append({
             "Strike": s,
-            f"CE IV Δ ({now}−{t1})": int((ce.get("implied_volatility", 0) - h1.loc[s, "CE IV"]) * FACTOR) if s in h1.index else None,
-            f"CE IV Δ ({t1}−{t2})": int((h1.loc[s, "CE IV"] - h2.loc[s, "CE IV"]) * FACTOR) if s in h1.index and s in h2.index else None,
-            f"PE IV Δ ({now}−{t1})": int((pe.get("implied_volatility", 0) - h1.loc[s, "PE IV"]) * FACTOR) if s in h1.index else None,
-            f"PE IV Δ ({t1}−{t2})": int((h1.loc[s, "PE IV"] - h2.loc[s, "PE IV"]) * FACTOR) if s in h1.index and s in h2.index else None,
+            f"CE IV Δ ({now}−{t1})": (ce.get("implied_volatility", 0) - h1.loc[s, "CE IV"]) * FACTOR if s in h1.index else None,
+            f"CE IV Δ ({t1}−{t2})": (h1.loc[s, "CE IV"] - h2.loc[s, "CE IV"]) * FACTOR if s in h1.index and s in h2.index else None,
+            f"PE IV Δ ({now}−{t1})": (pe.get("implied_volatility", 0) - h1.loc[s, "PE IV"]) * FACTOR if s in h1.index else None,
+            f"PE IV Δ ({t1}−{t2})": (h1.loc[s, "PE IV"] - h2.loc[s, "PE IV"]) * FACTOR if s in h1.index and s in h2.index else None,
         })
 
-    return pd.DataFrame(rows)
+    iv = pd.DataFrame(rows)
+    iv = iv.apply(pd.to_numeric, errors="coerce")
+    iv = iv.round(0).astype("Int64")
+
+    return iv
 
 # =================================================
 # DISPLAY
