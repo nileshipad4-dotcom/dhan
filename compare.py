@@ -1,7 +1,4 @@
 
-
-
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -36,8 +33,8 @@ def get_yahoo_price(symbol):
     except Exception:
         return None
 
-def safe_spot(all_strikes, spot):
-    return spot if spot is not None and not pd.isna(spot) else all_strikes[len(all_strikes)//2]
+def safe_spot(strikes, spot):
+    return spot if spot and not pd.isna(spot) else strikes[len(strikes)//2]
 
 # =================================================
 # CONFIG
@@ -65,6 +62,48 @@ UNDERLYINGS = {
         "yahoo": "^NSEBANK",
     },
 }
+
+# =================================================
+# LOAD CSVs ONCE (for timestamp sync)
+# =================================================
+df_nifty = pd.read_csv(UNDERLYINGS["NIFTY"]["csv"])
+df_bank = pd.read_csv(UNDERLYINGS["BANKNIFTY"]["csv"])
+
+for df in (df_nifty, df_bank):
+    df["timestamp"] = df["timestamp"].astype(str).str[-5:]
+
+# =================================================
+# COMMON TIMESTAMPS
+# =================================================
+common_times = sorted(
+    set(df_nifty["timestamp"]).intersection(df_bank["timestamp"]),
+    reverse=True,
+)
+
+if not common_times:
+    st.error("No common timestamps found between NIFTY and BANKNIFTY")
+    st.stop()
+
+# =================================================
+# COMMON TIMESTAMP SELECTORS (TOP)
+# =================================================
+st.subheader("⏱ Timestamp Selection")
+
+t1 = st.selectbox(
+    "Time-1 (Latest)",
+    common_times,
+    index=0,
+)
+
+t2 = st.selectbox(
+    "Time-2 (Previous)",
+    common_times,
+    index=1 if len(common_times) > 1 else 0,
+)
+
+st.markdown(
+    f"**Selected:**  Time-1 = `{t1}`  |  Time-2 = `{t2}`"
+)
 
 # =================================================
 # OPTION CHAIN
@@ -96,9 +135,9 @@ def fetch_live_oc(cfg):
         return None
 
 # =================================================
-# BUILD TABLE (WITH DROPDOWNS)
+# BUILD TABLE
 # =================================================
-def build_table(cfg, spot_price):
+def build_table(cfg, spot_price, t1, t2):
     df = pd.read_csv(cfg["csv"])
 
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
@@ -119,22 +158,6 @@ def build_table(cfg, spot_price):
     )
 
     df = df[df["Strike"].isin(STRIKES)]
-
-    times = sorted(df["timestamp"].unique(), reverse=True)
-
-    t1 = st.selectbox(
-        f"{cfg['csv']} | Time-1 (Latest)",
-        times,
-        index=0,
-        key=f"{cfg['csv']}_t1",
-    )
-
-    t2 = st.selectbox(
-        f"{cfg['csv']} | Time-2 (Previous)",
-        times,
-        index=1 if len(times) > 1 else 0,
-        key=f"{cfg['csv']}_t2",
-    )
 
     mp_t1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
     mp_t2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
@@ -197,19 +220,19 @@ def build_table(cfg, spot_price):
     return final, now
 
 # =================================================
-# DISPLAY
+# DISPLAY (2 TABLES)
 # =================================================
 col1, col2 = st.columns(2)
 
 for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     cfg = UNDERLYINGS[name]
     spot_price = get_yahoo_price(cfg["yahoo"])
-    table, now = build_table(cfg, spot_price)
+    table, now = build_table(cfg, spot_price, t1, t2)
 
     with col:
         st.subheader(f"{name} | Live Price: {int(spot_price) if spot_price else 'N/A'}")
 
-        if table is None or table.empty:
+        if table.empty:
             st.warning("No data available")
             continue
 
