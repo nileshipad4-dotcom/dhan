@@ -1,6 +1,4 @@
 
-
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -8,12 +6,13 @@ import yfinance as yf
 from datetime import datetime, timedelta
 
 FACTOR = 1000
+STRIKE_RANGE = 10  # ±10 strikes around ATM
 
 # =================================================
 # PAGE CONFIG
 # =================================================
 st.set_page_config(layout="wide")
-st.title("📊 NIFTY & BANKNIFTY – Max Pain + IV Comparison")
+st.title("📊 NIFTY & BANKNIFTY – Max Pain + IV Analysis")
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -37,12 +36,16 @@ def get_yahoo_price(symbol):
     except Exception:
         return None
 
-def safe_spot(strikes, spot):
-    return spot if spot is not None and not pd.isna(spot) else strikes[len(strikes)//2]
+def atm_strikes(all_strikes, spot, n=STRIKE_RANGE):
+    if spot is None or pd.isna(spot):
+        mid = len(all_strikes) // 2
+        return all_strikes[mid-n:mid+n+1]
+
+    atm = min(all_strikes, key=lambda x: abs(x - spot))
+    idx = all_strikes.index(atm)
+    return all_strikes[max(0, idx-n): idx+n+1]
 
 def get_spot_band(strikes, spot):
-    if spot is None or pd.isna(spot):
-        return set()
     lower = max([s for s in strikes if s <= spot], default=None)
     upper = min([s for s in strikes if s > spot], default=None)
     return {lower, upper}
@@ -75,7 +78,7 @@ CFG = {
 }
 
 # =================================================
-# LOAD CSVs FOR COMMON TIMESTAMPS
+# COMMON TIMESTAMPS
 # =================================================
 df_n = pd.read_csv(CFG["NIFTY"]["csv"])
 df_b = pd.read_csv(CFG["BANKNIFTY"]["csv"])
@@ -88,22 +91,15 @@ common_times = sorted(
     reverse=True,
 )
 
-if not common_times:
-    st.error("No common timestamps between NIFTY and BANKNIFTY")
-    st.stop()
-
-# =================================================
-# TIMESTAMP SELECTOR (TOP)
-# =================================================
 st.subheader("⏱ Timestamp Selection")
 
 t1 = st.selectbox("Time-1 (Latest)", common_times, index=0)
 t2 = st.selectbox("Time-2 (Previous)", common_times, index=1 if len(common_times) > 1 else 0)
 
-st.markdown(f"**Selected:** `{t1}` → `{t2}`")
+now = ist_hhmm()
 
 # =================================================
-# LIVE OPTION CHAIN
+# OPTION CHAIN
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc(cfg):
@@ -129,7 +125,7 @@ def fetch_live_oc(cfg):
 # =================================================
 # MAX PAIN TABLE
 # =================================================
-def build_max_pain(cfg, spot, t1, t2):
+def build_max_pain(cfg, spot):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
@@ -137,12 +133,7 @@ def build_max_pain(cfg, spot, t1, t2):
     df = df.dropna(subset=["Strike", "Max Pain"])
 
     all_strikes = sorted(df["Strike"].unique())
-    spot = safe_spot(all_strikes, spot)
-
-    strikes = set(
-        [s for s in all_strikes if s <= spot][-25:]
-        + [s for s in all_strikes if s > spot][:26]
-    )
+    strikes = atm_strikes(all_strikes, spot)
 
     df = df[df["Strike"].isin(strikes)]
 
@@ -151,14 +142,12 @@ def build_max_pain(cfg, spot, t1, t2):
 
     final = pd.DataFrame({
         "Strike": mp_t1.index,
+        f"MP ({now})": None,
         f"MP ({t1})": mp_t1.values,
         f"MP ({t2})": mp_t2.reindex(mp_t1.index).values,
     })
 
-    final[f"Δ MP (T1 − T2)"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
-
     oc = fetch_live_oc(cfg)
-    now = ist_hhmm()
 
     if oc:
         rows = []
@@ -188,26 +177,18 @@ def build_max_pain(cfg, spot, t1, t2):
 
         final = final.merge(live[["Strike", "MP_live"]], on="Strike")
         final[f"MP ({now})"] = final["MP_live"]
-        final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
-        final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"].diff()
 
-    cols = [
-        "Strike",
-        f"MP ({now})",
-        f"MP ({t1})",
-        f"MP ({t2})",
-        f"Δ MP (Live − {t1})",
-        f"Δ MP (T1 − T2)",
-        "ΔΔ MP",
-    ]
+    final[f"Δ MP ({now}−{t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
+    final[f"Δ MP ({t1}−{t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
+    final["ΔΔ MP"] = final[f"Δ MP ({now}−{t1})"].diff()
 
-    final = final[cols].apply(pd.to_numeric, errors="coerce")
+    final = final.drop(columns=["MP_live"], errors="ignore")
     final = final.round(0).astype("Int64").reset_index(drop=True)
 
-    return final, now
+    return final
 
 # =================================================
-# IV COMPARISON TABLE
+# IV TABLE
 # =================================================
 def build_iv_table(cfg, spot):
     df = pd.read_csv(cfg["csv"])
@@ -216,8 +197,8 @@ def build_iv_table(cfg, spot):
     df["PE IV"] = pd.to_numeric(df["PE IV"], errors="coerce")
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
-    strikes = sorted(df["Strike"].dropna().unique())
-    spot_band = get_spot_band(strikes, spot)
+    all_strikes = sorted(df["Strike"].dropna().unique())
+    strikes = atm_strikes(all_strikes, spot)
 
     h1 = df[df["timestamp"] == t1].groupby("Strike").mean(numeric_only=True)
     h2 = df[df["timestamp"] == t2].groupby("Strike").mean(numeric_only=True)
@@ -226,7 +207,7 @@ def build_iv_table(cfg, spot):
     rows = []
 
     if not oc:
-        return pd.DataFrame(), spot_band
+        return pd.DataFrame()
 
     for s in strikes:
         v = oc.get(f"{float(s):.6f}", {})
@@ -235,14 +216,13 @@ def build_iv_table(cfg, spot):
 
         rows.append({
             "Strike": s,
-            "CE IV Δ (Live−T1)": (ce.get("implied_volatility", 0) - h1.loc[s, "CE IV"]) * FACTOR if s in h1.index else None,
-            "CE IV Δ (T1−T2)": (h1.loc[s, "CE IV"] - h2.loc[s, "CE IV"]) * FACTOR if s in h1.index and s in h2.index else None,
-            "PE IV Δ (Live−T1)": (pe.get("implied_volatility", 0) - h1.loc[s, "PE IV"]) * FACTOR if s in h1.index else None,
-            "PE IV Δ (T1−T2)": (h1.loc[s, "PE IV"] - h2.loc[s, "PE IV"]) * FACTOR if s in h1.index and s in h2.index else None,
+            f"CE IV Δ ({now}−{t1})": int((ce.get("implied_volatility", 0) - h1.loc[s, "CE IV"]) * FACTOR) if s in h1.index else None,
+            f"CE IV Δ ({t1}−{t2})": int((h1.loc[s, "CE IV"] - h2.loc[s, "CE IV"]) * FACTOR) if s in h1.index and s in h2.index else None,
+            f"PE IV Δ ({now}−{t1})": int((pe.get("implied_volatility", 0) - h1.loc[s, "PE IV"]) * FACTOR) if s in h1.index else None,
+            f"PE IV Δ ({t1}−{t2})": int((h1.loc[s, "PE IV"] - h2.loc[s, "PE IV"]) * FACTOR) if s in h1.index and s in h2.index else None,
         })
 
-    iv = pd.DataFrame(rows).round(1)
-    return iv, spot_band
+    return pd.DataFrame(rows)
 
 # =================================================
 # DISPLAY
@@ -255,13 +235,12 @@ col1, col2 = st.columns(2)
 for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     cfg = CFG[name]
     spot = get_yahoo_price(cfg["yahoo"])
-    table, now = build_max_pain(cfg, spot, t1, t2)
+    table = build_max_pain(cfg, spot)
+    band = get_spot_band(table["Strike"].tolist(), spot)
+    min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
     with col:
         st.markdown(f"### {name} | Spot: {int(spot) if spot else 'N/A'}")
-
-        band = get_spot_band(table["Strike"].tolist(), spot)
-        min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
         def highlight_mp(row):
             if row["Strike"] == min_strike:
@@ -270,7 +249,7 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
                 return ["background-color:#00008B;color:white"] * len(row)
             return [""] * len(row)
 
-        st.dataframe(table.style.apply(highlight_mp, axis=1), use_container_width=True, height=650)
+        st.dataframe(table.style.apply(highlight_mp, axis=1), use_container_width=True, height=600)
 
 st.divider()
 st.subheader("📌 IV COMPARISON")
@@ -280,7 +259,8 @@ col3, col4 = st.columns(2)
 for col, name in zip([col3, col4], ["NIFTY", "BANKNIFTY"]):
     cfg = CFG[name]
     spot = get_yahoo_price(cfg["yahoo"])
-    iv, band = build_iv_table(cfg, spot)
+    iv = build_iv_table(cfg, spot)
+    band = get_spot_band(iv["Strike"].tolist(), spot)
 
     with col:
         st.markdown(f"### {name} | Spot: {int(spot) if spot else 'N/A'}")
@@ -290,4 +270,4 @@ for col, name in zip([col3, col4], ["NIFTY", "BANKNIFTY"]):
                 return ["background-color:#00008B;color:white"] * len(row)
             return [""] * len(row)
 
-        st.dataframe(iv.style.apply(highlight_iv, axis=1), use_container_width=True, height=650)
+        st.dataframe(iv.style.apply(highlight_iv, axis=1), use_container_width=True, height=600)
