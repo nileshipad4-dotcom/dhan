@@ -86,7 +86,7 @@ df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
 df["timestamp"] = df["timestamp"].astype(str).str[-5:]
 
 # =================================================
-# STRIKE WINDOW (MATCHES COLLECTOR)
+# STRIKE WINDOW
 # =================================================
 all_strikes = sorted(df["Strike"].dropna().unique())
 below = [s for s in all_strikes if s <= CENTER][-25:]
@@ -162,7 +162,6 @@ if oc:
 
     live = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-    # LIVE MAX PAIN CALCULATION
     A, B = live["CE LTP"], live["CE OI"]
     G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
@@ -176,13 +175,12 @@ if oc:
     ]
 
     final = final.merge(live[["Strike", "MP_live"]], on="Strike", how="inner")
-
     final[f"MP ({now})"] = final["MP_live"]
     final[f"Δ MP (Live − {t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final["ΔΔ MP"] = final[f"Δ MP (Live − {t1})"].diff()
 
 # =================================================
-# FINAL VIEW
+# FINAL VIEW (NO DECIMALS ANYWHERE)
 # =================================================
 cols = [
     "Strike",
@@ -194,7 +192,11 @@ cols = [
     "Δ MP (T1 − T2)",
 ]
 
-final = final[cols].apply(pd.to_numeric, errors="coerce").round(0)
+final = (
+    final[cols]
+    .apply(pd.to_numeric, errors="coerce")
+    .where(lambda x: x.isna(), lambda x: x.astype("Int64"))
+)
 
 # =================================================
 # STYLING
