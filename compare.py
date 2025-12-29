@@ -25,15 +25,18 @@ except Exception:
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
-@st.cache_data(ttl=30)
-def get_yahoo_price(symbol):
+@st.cache_data(ttl=300)
+def get_spot_and_pct(symbol):
     try:
-        data = yf.Ticker(symbol).history(period="1d", interval="1m")
-        if data.empty:
-            return None
-        return float(data["Close"].iloc[-1])
+        data = yf.Ticker(symbol).history(period="2d", interval="1d")
+        if len(data) < 2:
+            return None, None
+        prev_close = data["Close"].iloc[-2]
+        last_close = data["Close"].iloc[-1]
+        pct = ((last_close - prev_close) / prev_close) * 100
+        return float(last_close), round(pct, 2)
     except Exception:
-        return None
+        return None, None
 
 def atm_slice(df, spot, n=STRIKE_RANGE):
     if df.empty or spot is None:
@@ -121,7 +124,7 @@ def fetch_live_oc(cfg):
     ).json().get("data", {}).get("oc")
 
 # =================================================
-# MAX PAIN (CALC UNCHANGED, MP_live DROPPED)
+# MAX PAIN (CALC UNCHANGED)
 # =================================================
 def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
@@ -163,7 +166,6 @@ def build_max_pain(cfg):
             })
 
         live = pd.DataFrame(rows).sort_values("Strike")
-
         A, B = live["CE LTP"], live["CE OI"]
         G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
@@ -234,14 +236,22 @@ col1, col2 = st.columns(2)
 for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     cfg = CFG[name]
     table_full = build_max_pain(cfg)
-    spot = get_yahoo_price(cfg["yahoo"])
+    spot, pct = get_spot_and_pct(cfg["yahoo"])
     table = atm_slice(table_full, spot)
 
     band = get_spot_band(table["Strike"].tolist(), spot)
     min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
     with col:
-        st.markdown(f"### {name} | Spot: {int(spot) if spot else 'N/A'}")
+        if spot is not None and pct is not None:
+            color = "green" if pct >= 0 else "red"
+            st.markdown(
+                f"### {name} ({int(spot)} : "
+                f"<span style='color:{color}'>{pct}%</span>)",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(f"### {name} (Spot: N/A)")
 
         def highlight_mp(row):
             if row["Strike"] == min_strike:
@@ -263,12 +273,20 @@ col3, col4 = st.columns(2)
 
 for col, name in zip([col3, col4], ["NIFTY", "BANKNIFTY"]):
     cfg = CFG[name]
-    spot = get_yahoo_price(cfg["yahoo"])
+    spot, pct = get_spot_and_pct(cfg["yahoo"])
     iv = build_iv_table(cfg, spot)
     band = get_spot_band(iv["Strike"].tolist(), spot)
 
     with col:
-        st.markdown(f"### {name} | Spot: {int(spot) if spot else 'N/A'}")
+        if spot is not None and pct is not None:
+            color = "green" if pct >= 0 else "red"
+            st.markdown(
+                f"### {name} ({int(spot)} : "
+                f"<span style='color:{color}'>{pct}%</span>)",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(f"### {name} (Spot: N/A)")
 
         def highlight_iv(row):
             if row["Strike"] in band:
