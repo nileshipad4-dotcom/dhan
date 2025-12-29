@@ -5,7 +5,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 
 FACTOR = 1000
-STRIKE_RANGE = 10  # ONLY for display slicing
+STRIKE_RANGE = 10  # DISPLAY ONLY
 
 # =================================================
 # PAGE CONFIG
@@ -34,6 +34,13 @@ def get_yahoo_price(symbol):
         return float(data["Close"].iloc[-1])
     except Exception:
         return None
+
+def atm_slice(df, spot, n=STRIKE_RANGE):
+    if df.empty or spot is None:
+        return df
+    atm = min(df["Strike"], key=lambda x: abs(x - spot))
+    idx = df.index[df["Strike"] == atm][0]
+    return df.iloc[max(0, idx-n): idx+n+1].reset_index(drop=True)
 
 def get_spot_band(strikes, spot):
     if spot is None:
@@ -114,7 +121,7 @@ def fetch_live_oc(cfg):
     ).json().get("data", {}).get("oc")
 
 # =================================================
-# MAX PAIN (UNCHANGED CALCULATION)
+# MAX PAIN (CALC UNCHANGED)
 # =================================================
 def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
@@ -178,7 +185,46 @@ def build_max_pain(cfg):
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 # =================================================
-# DISPLAY — MAX PAIN (±10 STRIKES AROUND ATM ONLY)
+# IV TABLE (UNCHANGED)
+# =================================================
+def build_iv_table(cfg, spot):
+    df = pd.read_csv(cfg["csv"])
+    df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
+    df["CE IV"] = pd.to_numeric(df["CE IV"], errors="coerce")
+    df["PE IV"] = pd.to_numeric(df["PE IV"], errors="coerce")
+    df["timestamp"] = df["timestamp"].astype(str).str[-5:]
+
+    strikes = sorted(df["Strike"].dropna().unique())
+    atm = min(strikes, key=lambda x: abs(x - spot)) if spot else strikes[len(strikes)//2]
+    idx = strikes.index(atm)
+    strikes = strikes[max(0, idx-STRIKE_RANGE): idx+STRIKE_RANGE+1]
+
+    h1 = df[df["timestamp"] == t1].groupby("Strike").mean(numeric_only=True)
+    h2 = df[df["timestamp"] == t2].groupby("Strike").mean(numeric_only=True)
+
+    oc = fetch_live_oc(cfg)
+    rows = []
+
+    for s in strikes:
+        v = oc.get(f"{float(s):.6f}", {})
+        ce = v.get("ce", {})
+        pe = v.get("pe", {})
+
+        rows.append({
+            "Strike": s,
+            f"CE IV Δ ({now}−{t1})": (ce.get("implied_volatility", 0) - h1.loc[s, "CE IV"]) * FACTOR if s in h1.index else None,
+            f"CE IV Δ ({t1}−{t2})": (h1.loc[s, "CE IV"] - h2.loc[s, "CE IV"]) * FACTOR if s in h1.index and s in h2.index else None,
+            f"PE IV Δ ({now}−{t1})": (pe.get("implied_volatility", 0) - h1.loc[s, "PE IV"]) * FACTOR if s in h1.index else None,
+            f"PE IV Δ ({t1}−{t2})": (h1.loc[s, "PE IV"] - h2.loc[s, "PE IV"]) * FACTOR if s in h1.index and s in h2.index else None,
+        })
+
+    iv = pd.DataFrame(rows)
+    iv = iv.apply(pd.to_numeric, errors="coerce")
+    iv = iv.round(0).astype("Int64")
+    return iv
+
+# =================================================
+# DISPLAY
 # =================================================
 st.divider()
 st.subheader("📌 MAX PAIN")
@@ -189,15 +235,7 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     cfg = CFG[name]
     table_full = build_max_pain(cfg)
     spot = get_yahoo_price(cfg["yahoo"])
-
-    if spot is not None and not table_full.empty:
-        atm_strike = min(table_full["Strike"], key=lambda x: abs(x - spot))
-        atm_idx = table_full.index[table_full["Strike"] == atm_strike][0]
-        table = table_full.iloc[
-            max(0, atm_idx - STRIKE_RANGE) : atm_idx + STRIKE_RANGE + 1
-        ].reset_index(drop=True)
-    else:
-        table = table_full
+    table = atm_slice(table_full, spot)
 
     band = get_spot_band(table["Strike"].tolist(), spot)
     min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
@@ -214,6 +252,31 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
 
         st.dataframe(
             table.style.apply(highlight_mp, axis=1),
+            use_container_width=True,
+            height=600,
+        )
+
+st.divider()
+st.subheader("📌 IV COMPARISON")
+
+col3, col4 = st.columns(2)
+
+for col, name in zip([col3, col4], ["NIFTY", "BANKNIFTY"]):
+    cfg = CFG[name]
+    spot = get_yahoo_price(cfg["yahoo"])
+    iv = build_iv_table(cfg, spot)
+    band = get_spot_band(iv["Strike"].tolist(), spot)
+
+    with col:
+        st.markdown(f"### {name} | Spot: {int(spot) if spot else 'N/A'}")
+
+        def highlight_iv(row):
+            if row["Strike"] in band:
+                return ["background-color:#00008B;color:white"] * len(row)
+            return [""] * len(row)
+
+        st.dataframe(
+            iv.style.apply(highlight_iv, axis=1),
             use_container_width=True,
             height=600,
         )
