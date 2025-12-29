@@ -241,7 +241,7 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
     min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
     with col:
-        st.markdown(f"### {name} : {int(spot) if spot else 'N/A'}")
+        st.markdown(f"### {name} | Spot: {int(spot) if spot else 'N/A'}")
 
         def highlight_mp(row):
             if row["Strike"] == min_strike:
@@ -268,7 +268,7 @@ for col, name in zip([col3, col4], ["NIFTY", "BANKNIFTY"]):
     band = get_spot_band(iv["Strike"].tolist(), spot)
 
     with col:
-        st.markdown(f"### {name} : {int(spot) if spot else 'N/A'}")
+        st.markdown(f"### {name} | Spot: {int(spot) if spot else 'N/A'}")
 
         def highlight_iv(row):
             if row["Strike"] in band:
