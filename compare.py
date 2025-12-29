@@ -104,7 +104,7 @@ elif row_signature != st.session_state.last_row_signature:
 
 
 for df in (df_n, df_b):
-    df["timestamp"] = df["timestamp"].astype(str).str[-5:]
+    df["timestamp"] = (     pd.to_datetime(df["timestamp"], errors="coerce")     .dt.strftime("%Y-%m-%d %H:%M") )
 
 common_times = sorted(
     set(df_n["timestamp"]).intersection(df_b["timestamp"]),
@@ -147,7 +147,7 @@ def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
-    df["timestamp"] = df["timestamp"].astype(str).str[-5:]
+    df["timestamp"] = (     pd.to_datetime(df["timestamp"], errors="coerce")     .dt.strftime("%Y-%m-%d %H:%M") )
     df = df.dropna(subset=["Strike", "Max Pain"])
 
     all_strikes = sorted(df["Strike"].unique())
@@ -212,7 +212,7 @@ def build_iv_table(cfg, spot):
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["CE IV"] = pd.to_numeric(df["CE IV"], errors="coerce")
     df["PE IV"] = pd.to_numeric(df["PE IV"], errors="coerce")
-    df["timestamp"] = df["timestamp"].astype(str).str[-5:]
+    df["timestamp"] = (     pd.to_datetime(df["timestamp"], errors="coerce")     .dt.strftime("%Y-%m-%d %H:%M") )
 
     strikes = sorted(df["Strike"].dropna().unique())
     atm = min(strikes, key=lambda x: abs(x - spot)) if spot else strikes[len(strikes)//2]
