@@ -121,7 +121,7 @@ def fetch_live_oc(cfg):
     ).json().get("data", {}).get("oc")
 
 # =================================================
-# MAX PAIN (CALC UNCHANGED)
+# MAX PAIN (CALC UNCHANGED, MP_live DROPPED)
 # =================================================
 def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
@@ -163,10 +163,11 @@ def build_max_pain(cfg):
             })
 
         live = pd.DataFrame(rows).sort_values("Strike")
+
         A, B = live["CE LTP"], live["CE OI"]
         G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
-        live["MP_live"] = [
+        mp_live = [
             ((-sum(A[i:] * B[i:])
               + G.iloc[i] * sum(B[:i]) - sum(G[:i] * B[:i])
               - sum(M[:i] * L[:i])
@@ -175,8 +176,7 @@ def build_max_pain(cfg):
             for i in range(len(live))
         ]
 
-        final = final.merge(live[["Strike", "MP_live"]], on="Strike", how="left")
-        final[f"MP ({now})"] = final["MP_live"]
+        final[f"MP ({now})"] = mp_live
 
     final[f"Δ MP ({now}−{t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final[f"Δ MP ({t1}−{t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
