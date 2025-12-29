@@ -7,7 +7,7 @@ from streamlit_autorefresh import st_autorefresh
 
 st_autorefresh(
     interval=60_000,   # 1 minute
-    key="keep_alive"
+    key="auto_refresh"
 )
 
 
@@ -89,6 +89,22 @@ CFG = {
 # =================================================
 df_n = pd.read_csv(CFG["NIFTY"]["csv"])
 df_b = pd.read_csv(CFG["BANKNIFTY"]["csv"])
+
+# =================================================
+# AUTO RERUN WHEN NEW DATA ARRIVES
+# =================================================
+latest_ts_n = df_n["timestamp"].astype(str).iloc[-1]
+latest_ts_b = df_b["timestamp"].astype(str).iloc[-1]
+
+latest_ts = min(latest_ts_n, latest_ts_b)  # common safe point
+
+if "last_seen_ts" not in st.session_state:
+    st.session_state.last_seen_ts = latest_ts
+
+elif latest_ts != st.session_state.last_seen_ts:
+    st.session_state.last_seen_ts = latest_ts
+    st.experimental_rerun()
+
 
 for df in (df_n, df_b):
     df["timestamp"] = df["timestamp"].astype(str).str[-5:]
