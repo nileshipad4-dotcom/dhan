@@ -18,7 +18,7 @@ STRIKE_RANGE = 10  # DISPLAY ONLY
 # PAGE CONFIG
 # =================================================
 st.set_page_config(layout="wide")
-st.title("📊 NIFTY & BANKNIFTY – Max Pain + IV Dashboard")
+st.title("📊 INDEX")
 
 
 
