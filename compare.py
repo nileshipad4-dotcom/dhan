@@ -87,19 +87,20 @@ df_n = pd.read_csv(CFG["NIFTY"]["csv"])
 df_b = pd.read_csv(CFG["BANKNIFTY"]["csv"])
 
 # =================================================
-# AUTO RERUN WHEN NEW DATA ARRIVES
+# AUTO-RERUN WHEN NEW DATA IS APPENDED
 # =================================================
-latest_ts_n = df_n["timestamp"].astype(str).iloc[-1]
-latest_ts_b = df_b["timestamp"].astype(str).iloc[-1]
+row_signature = (
+    len(df_n),
+    len(df_b)
+)
 
-latest_ts = min(latest_ts_n, latest_ts_b)  # common safe point
+if "last_row_signature" not in st.session_state:
+    st.session_state.last_row_signature = row_signature
 
-if "last_seen_ts" not in st.session_state:
-    st.session_state.last_seen_ts = latest_ts
+elif row_signature != st.session_state.last_row_signature:
+    st.session_state.last_row_signature = row_signature
+    st.rerun()
 
-elif latest_ts != st.session_state.last_seen_ts:
-    st.session_state.last_seen_ts = latest_ts
-    st.experimental_rerun()
 
 
 for df in (df_n, df_b):
