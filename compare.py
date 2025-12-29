@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
 st_autorefresh(
-    interval=300_000,  # 5 minutes (in milliseconds)
+    interval=60_000,  # 5 minutes (in milliseconds)
     key="auto_refresh"
 )
 
