@@ -3,6 +3,13 @@ import pandas as pd
 import requests
 import yfinance as yf
 from datetime import datetime, timedelta
+from streamlit_autorefresh import st_autorefresh
+
+st_autorefresh(
+    interval=300_000,  # 5 minutes (in milliseconds)
+    key="auto_refresh"
+)
+
 
 FACTOR = 1000
 STRIKE_RANGE = 10  # DISPLAY ONLY
