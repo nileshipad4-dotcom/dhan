@@ -20,11 +20,7 @@ STRIKE_RANGE = 10  # DISPLAY ONLY
 st.set_page_config(layout="wide")
 st.title("📊 NIFTY & BANKNIFTY – Max Pain + IV Dashboard")
 
-try:
-    from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=360_000, key="refresh")
-except Exception:
-    pass
+
 
 # =================================================
 # HELPERS
