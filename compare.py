@@ -21,6 +21,7 @@ st.title("📊 INDEX")
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
+
 @st.cache_data(ttl=15)
 def get_dhan_price(cfg):
     r = requests.post(
@@ -29,7 +30,13 @@ def get_dhan_price(cfg):
         json={"IDX_I": [cfg["scrip"]]},
         timeout=5,
     )
-    return r.json().get("data", {}).get("IDX_I", {}).get(str(cfg["scrip"]))
+
+    data = r.json().get("data", {}).get("IDX_I", {}).get(str(cfg["scrip"]), {})
+    return data.get("ltp")
+
+
+
+
 
 def atm_slice(df, spot, n=STRIKE_RANGE):
     if df.empty or spot is None:
