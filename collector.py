@@ -13,7 +13,9 @@ API_BASE = "https://api.dhan.co/v2"
 UNDERLYINGS = {
     "NIFTY": {"scrip": 13, "seg": "IDX_I", "center": 26000},
     "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "center": 60000},
+    "MIDCPNIFTY": {"scrip": 442, "seg": "IDX_I", "center": 13600},
 }
+
 
 HEADERS = {
     "client-id": CLIENT_ID,
@@ -37,7 +39,7 @@ BASE_COLUMNS = [
     "Max Pain",
 ]
 
-for sym in ["nifty", "banknifty"]:
+for sym in ["nifty", "banknifty", "midcpnifty"]:
     path = os.path.join(DATA_DIR, f"{sym}.csv")
     if not os.path.exists(path):
         pd.DataFrame(columns=BASE_COLUMNS).to_csv(path, index=False)
