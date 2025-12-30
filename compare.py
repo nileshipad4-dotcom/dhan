@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import requests
-import yfinance as yf
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
@@ -22,13 +21,15 @@ st.title("📊 INDEX")
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
-@st.cache_data(ttl=30)
-def get_yahoo_price(symbol):
-    try:
-        data = yf.Ticker(symbol).history(period="1d", interval="1m")
-        return float(data["Close"].iloc[-1]) if not data.empty else None
-    except Exception:
-        return None
+@st.cache_data(ttl=15)
+def get_dhan_price(cfg):
+    r = requests.post(
+        "https://api.dhan.co/v2/marketfeed/ltp",
+        headers=HEADERS,
+        json={"IDX_I": [cfg["scrip"]]},
+        timeout=5,
+    )
+    return r.json().get("data", {}).get("IDX_I", {}).get(str(cfg["scrip"]))
 
 def atm_slice(df, spot, n=STRIKE_RANGE):
     if df.empty or spot is None:
@@ -60,22 +61,19 @@ CFG = {
         "scrip": 13,
         "seg": "IDX_I",
         "csv": "data/nifty.csv",
-        "yahoo": "^NSEI",
         "center": 26000,
     },
     "BANKNIFTY": {
         "scrip": 25,
         "seg": "IDX_I",
         "csv": "data/banknifty.csv",
-        "yahoo": "^NSEBANK",
         "center": 60000,
     },
     "MIDCPNIFTY": {
         "scrip": 442,
         "seg": "IDX_I",
         "csv": "data/midcpnifty.csv",
-        "yahoo": "^NSEMDCP50",
-        "center": 12000,
+        "center": 13500,
     },
 }
 
@@ -113,15 +111,10 @@ common_times = sorted(
 st.subheader("⏱ Timestamp Selection")
 
 t1_full = st.selectbox("Time-1 (Latest)", common_times, index=0)
-t2_full = st.selectbox(
-    "Time-2 (Previous)",
-    common_times,
-    index=1 if len(common_times) > 1 else 0
-)
+t2_full = st.selectbox("Time-2 (Previous)", common_times, index=1 if len(common_times) > 1 else 0)
 
-t1 = t1_full[-5:]  # HH:MM only (for column names)
+t1 = t1_full[-5:]
 t2 = t2_full[-5:]
-
 now = ist_hhmm()
 
 # =================================================
@@ -155,10 +148,7 @@ def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
-    df["timestamp"] = (
-        pd.to_datetime(df["timestamp"], errors="coerce")
-        .dt.strftime("%Y-%m-%d %H:%M")
-    )
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
     df = df.dropna(subset=["Strike", "Max Pain"])
 
     strikes = sorted(df["Strike"].unique())
@@ -170,15 +160,8 @@ def build_max_pain(cfg):
 
     df = df[df["Strike"].isin(strikes)]
 
-    mp1 = (
-        df[df["timestamp"] == t1_full]
-        .groupby("Strike")["Max Pain"].mean() / 100
-    )
-
-    mp2 = (
-        df[df["timestamp"] == t2_full]
-        .groupby("Strike")["Max Pain"].mean() / 100
-    )
+    mp1 = df[df["timestamp"] == t1_full].groupby("Strike")["Max Pain"].mean() / 100
+    mp2 = df[df["timestamp"] == t2_full].groupby("Strike")["Max Pain"].mean() / 100
 
     final = pd.DataFrame({
         "Strike": mp1.index,
@@ -231,7 +214,7 @@ c1, c2, c3 = st.columns(3)
 for col, name in zip([c1, c2, c3], ["NIFTY", "BANKNIFTY", "MIDCPNIFTY"]):
     cfg = CFG[name]
     table_full = build_max_pain(cfg)
-    spot = get_yahoo_price(cfg["yahoo"])
+    spot = get_dhan_price(cfg)
     table = atm_slice(table_full, spot)
 
     band = get_spot_band(table["Strike"].tolist(), spot)
@@ -249,34 +232,6 @@ for col, name in zip([c1, c2, c3], ["NIFTY", "BANKNIFTY", "MIDCPNIFTY"]):
 
         st.dataframe(
             table.style.apply(highlight_mp, axis=1),
-            use_container_width=True,
-            height=600,
-        )
-
-# =================================================
-# IV COMPARISON (UNCHANGED)
-# =================================================
-st.divider()
-st.subheader("📌 IV COMPARISON")
-
-col4, col5 = st.columns(2)
-
-for col, name in zip([col4, col5], ["NIFTY", "BANKNIFTY"]):
-    cfg = CFG[name]
-    spot = get_yahoo_price(cfg["yahoo"])
-    iv = build_iv_table(cfg, spot)
-    band = get_spot_band(iv["Strike"].tolist(), spot)
-
-    with col:
-        st.markdown(f"### {name} : {int(spot) if spot else 'N/A'}")
-
-        def highlight_iv(row):
-            if row["Strike"] in band:
-                return ["background-color:#00008B;color:white"] * len(row)
-            return [""] * len(row)
-
-        st.dataframe(
-            iv.style.apply(highlight_iv, axis=1),
             use_container_width=True,
             height=600,
         )
