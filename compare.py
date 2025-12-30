@@ -31,9 +31,12 @@ def get_dhan_price(cfg):
         timeout=5,
     )
 
-    data = r.json().get("data", {}).get("IDX_I", {}).get(str(cfg["scrip"]), {})
-    return data.get("ltp")
+    raw = r.json().get("data", {}).get("IDX_I", {}).get(str(cfg["scrip"]))
 
+    # Handles BOTH response formats
+    if isinstance(raw, dict):
+        return raw.get("ltp")
+    return raw
 
 
 
