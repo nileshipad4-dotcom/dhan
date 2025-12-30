@@ -55,7 +55,6 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-
 CFG = {
     "NIFTY": {
         "scrip": 13,
@@ -96,7 +95,10 @@ elif row_signature != st.session_state.last_row_signature:
     st.rerun()
 
 for df in (df_n, df_b, df_m):
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
+    df["timestamp"] = (
+        pd.to_datetime(df["timestamp"], errors="coerce")
+        .dt.strftime("%Y-%m-%d %H:%M")
+    )
 
 common_times = sorted(
     set(df_n["timestamp"])
@@ -105,9 +107,21 @@ common_times = sorted(
     reverse=True,
 )
 
+# =================================================
+# TIMESTAMP SELECTION
+# =================================================
 st.subheader("⏱ Timestamp Selection")
-t1 = st.selectbox("Time-1 (Latest)", common_times, index=0)
-t2 = st.selectbox("Time-2 (Previous)", common_times, index=1 if len(common_times) > 1 else 0)
+
+t1_full = st.selectbox("Time-1 (Latest)", common_times, index=0)
+t2_full = st.selectbox(
+    "Time-2 (Previous)",
+    common_times,
+    index=1 if len(common_times) > 1 else 0
+)
+
+t1 = t1_full[-5:]  # HH:MM only (for column names)
+t2 = t2_full[-5:]
+
 now = ist_hhmm()
 
 # =================================================
@@ -141,20 +155,30 @@ def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
+    df["timestamp"] = (
+        pd.to_datetime(df["timestamp"], errors="coerce")
+        .dt.strftime("%Y-%m-%d %H:%M")
+    )
     df = df.dropna(subset=["Strike", "Max Pain"])
 
-    all_strikes = sorted(df["Strike"].unique())
+    strikes = sorted(df["Strike"].unique())
     center = cfg["center"]
 
-    below = [s for s in all_strikes if s <= center][-35:]
-    above = [s for s in all_strikes if s > center][:36]
+    below = [s for s in strikes if s <= center][-35:]
+    above = [s for s in strikes if s > center][:36]
     strikes = sorted(set(below + above))
 
     df = df[df["Strike"].isin(strikes)]
 
-    mp1 = df[df["timestamp"] == t1].groupby("Strike")["Max Pain"].mean() / 100
-    mp2 = df[df["timestamp"] == t2].groupby("Strike")["Max Pain"].mean() / 100
+    mp1 = (
+        df[df["timestamp"] == t1_full]
+        .groupby("Strike")["Max Pain"].mean() / 100
+    )
+
+    mp2 = (
+        df[df["timestamp"] == t2_full]
+        .groupby("Strike")["Max Pain"].mean() / 100
+    )
 
     final = pd.DataFrame({
         "Strike": mp1.index,
