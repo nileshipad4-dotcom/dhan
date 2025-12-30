@@ -5,22 +5,16 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
-st_autorefresh(
-    interval=60_000,   # 1 minute
-    key="auto_refresh"
-)
-
+st_autorefresh(interval=60_000, key="auto_refresh")
 
 FACTOR = 1000
-STRIKE_RANGE = 10  # DISPLAY ONLY
+STRIKE_RANGE = 10
 
 # =================================================
 # PAGE CONFIG
 # =================================================
 st.set_page_config(layout="wide")
 st.title("📊 INDEX")
-
-
 
 # =================================================
 # HELPERS
@@ -32,9 +26,7 @@ def ist_hhmm():
 def get_yahoo_price(symbol):
     try:
         data = yf.Ticker(symbol).history(period="1d", interval="1m")
-        if data.empty:
-            return None
-        return float(data["Close"].iloc[-1])
+        return float(data["Close"].iloc[-1]) if not data.empty else None
     except Exception:
         return None
 
@@ -63,6 +55,7 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
+
 CFG = {
     "NIFTY": {
         "scrip": 13,
@@ -78,36 +71,37 @@ CFG = {
         "yahoo": "^NSEBANK",
         "center": 60000,
     },
+    "MIDCPNIFTY": {
+        "scrip": 442,
+        "seg": "IDX_I",
+        "csv": "data/midcpnifty.csv",
+        "yahoo": "^NSEMDCP50",
+        "center": 12000,
+    },
 }
 
 # =================================================
-# COMMON TIMESTAMPS
+# LOAD CSVs
 # =================================================
 df_n = pd.read_csv(CFG["NIFTY"]["csv"])
 df_b = pd.read_csv(CFG["BANKNIFTY"]["csv"])
+df_m = pd.read_csv(CFG["MIDCPNIFTY"]["csv"])
 
-# =================================================
-# AUTO-RERUN WHEN NEW DATA IS APPENDED
-# =================================================
-row_signature = (
-    len(df_n),
-    len(df_b)
-)
+row_signature = (len(df_n), len(df_b), len(df_m))
 
 if "last_row_signature" not in st.session_state:
     st.session_state.last_row_signature = row_signature
-
 elif row_signature != st.session_state.last_row_signature:
     st.session_state.last_row_signature = row_signature
     st.rerun()
 
-
-
-for df in (df_n, df_b):
-    df["timestamp"] = (     pd.to_datetime(df["timestamp"], errors="coerce")     .dt.strftime("%Y-%m-%d %H:%M") )
+for df in (df_n, df_b, df_m):
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
 
 common_times = sorted(
-    set(df_n["timestamp"]).intersection(df_b["timestamp"]),
+    set(df_n["timestamp"])
+    .intersection(df_b["timestamp"])
+    .intersection(df_m["timestamp"]),
     reverse=True,
 )
 
@@ -141,13 +135,13 @@ def fetch_live_oc(cfg):
     ).json().get("data", {}).get("oc")
 
 # =================================================
-# MAX PAIN (CALC UNCHANGED, MP_live DROPPED)
+# MAX PAIN
 # =================================================
 def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
-    df["timestamp"] = (     pd.to_datetime(df["timestamp"], errors="coerce")     .dt.strftime("%Y-%m-%d %H:%M") )
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
     df = df.dropna(subset=["Strike", "Max Pain"])
 
     all_strikes = sorted(df["Strike"].unique())
@@ -187,7 +181,7 @@ def build_max_pain(cfg):
         A, B = live["CE LTP"], live["CE OI"]
         G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
-        mp_live = [
+        final[f"MP ({now})"] = [
             ((-sum(A[i:] * B[i:])
               + G.iloc[i] * sum(B[:i]) - sum(G[:i] * B[:i])
               - sum(M[:i] * L[:i])
@@ -196,8 +190,6 @@ def build_max_pain(cfg):
             for i in range(len(live))
         ]
 
-        final[f"MP ({now})"] = mp_live
-
     final[f"Δ MP ({now}−{t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final[f"Δ MP ({t1}−{t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
     final["ΔΔ MP"] = final[f"Δ MP ({now}−{t1})"].diff()
@@ -205,53 +197,14 @@ def build_max_pain(cfg):
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 # =================================================
-# IV TABLE (UNCHANGED)
-# =================================================
-def build_iv_table(cfg, spot):
-    df = pd.read_csv(cfg["csv"])
-    df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
-    df["CE IV"] = pd.to_numeric(df["CE IV"], errors="coerce")
-    df["PE IV"] = pd.to_numeric(df["PE IV"], errors="coerce")
-    df["timestamp"] = (     pd.to_datetime(df["timestamp"], errors="coerce")     .dt.strftime("%Y-%m-%d %H:%M") )
-
-    strikes = sorted(df["Strike"].dropna().unique())
-    atm = min(strikes, key=lambda x: abs(x - spot)) if spot else strikes[len(strikes)//2]
-    idx = strikes.index(atm)
-    strikes = strikes[max(0, idx-STRIKE_RANGE): idx+STRIKE_RANGE+1]
-
-    h1 = df[df["timestamp"] == t1].groupby("Strike").mean(numeric_only=True)
-    h2 = df[df["timestamp"] == t2].groupby("Strike").mean(numeric_only=True)
-
-    oc = fetch_live_oc(cfg)
-    rows = []
-
-    for s in strikes:
-        v = oc.get(f"{float(s):.6f}", {})
-        ce = v.get("ce", {})
-        pe = v.get("pe", {})
-
-        rows.append({
-            "Strike": s,
-            f"CE IV Δ ({now}−{t1})": (ce.get("implied_volatility", 0) - h1.loc[s, "CE IV"]) * FACTOR if s in h1.index else None,
-            f"CE IV Δ ({t1}−{t2})": (h1.loc[s, "CE IV"] - h2.loc[s, "CE IV"]) * FACTOR if s in h1.index and s in h2.index else None,
-            f"PE IV Δ ({now}−{t1})": (pe.get("implied_volatility", 0) - h1.loc[s, "PE IV"]) * FACTOR if s in h1.index else None,
-            f"PE IV Δ ({t1}−{t2})": (h1.loc[s, "PE IV"] - h2.loc[s, "PE IV"]) * FACTOR if s in h1.index and s in h2.index else None,
-        })
-
-    iv = pd.DataFrame(rows)
-    iv = iv.apply(pd.to_numeric, errors="coerce")
-    iv = iv.round(0).astype("Int64")
-    return iv
-
-# =================================================
-# DISPLAY
+# DISPLAY MAX PAIN
 # =================================================
 st.divider()
 st.subheader("📌 MAX PAIN")
 
-col1, col2 = st.columns(2)
+c1, c2, c3 = st.columns(3)
 
-for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
+for col, name in zip([c1, c2, c3], ["NIFTY", "BANKNIFTY", "MIDCPNIFTY"]):
     cfg = CFG[name]
     table_full = build_max_pain(cfg)
     spot = get_yahoo_price(cfg["yahoo"])
@@ -276,12 +229,15 @@ for col, name in zip([col1, col2], ["NIFTY", "BANKNIFTY"]):
             height=600,
         )
 
+# =================================================
+# IV COMPARISON (UNCHANGED)
+# =================================================
 st.divider()
 st.subheader("📌 IV COMPARISON")
 
-col3, col4 = st.columns(2)
+col4, col5 = st.columns(2)
 
-for col, name in zip([col3, col4], ["NIFTY", "BANKNIFTY"]):
+for col, name in zip([col4, col5], ["NIFTY", "BANKNIFTY"]):
     cfg = CFG[name]
     spot = get_yahoo_price(cfg["yahoo"])
     iv = build_iv_table(cfg, spot)
