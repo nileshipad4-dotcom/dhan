@@ -213,10 +213,8 @@ def build_max_pain(cfg):
 st.divider()
 st.subheader("📌 MAX PAIN")
 
-cols = st.columns(4)
+for name, cfg in CFG.items():
 
-for col, name in zip(cols, CFG.keys()):
-    cfg = CFG[name]
     table_full = build_max_pain(cfg)
     spot = get_yahoo_price(cfg["yahoo"])
     table = atm_slice(table_full, spot)
@@ -229,18 +227,22 @@ for col, name in zip(cols, CFG.keys()):
 
     band = get_spot_band(table["Strike"].tolist(), spot)
 
-    with col:
-        st.markdown(f"### {name} : {int(spot) if spot else 'N/A'}")
+    st.markdown(
+        f"## {name} : {int(spot) if spot else 'N/A'}",
+        unsafe_allow_html=True
+    )
 
-        def highlight_mp(row):
-            if min_strike is not None and row["Strike"] == min_strike:
-                return ["background-color:#8B0000;color:white"] * len(row)
-            if row["Strike"] in band:
-                return ["background-color:#00008B;color:white"] * len(row)
-            return [""] * len(row)
+    def highlight_mp(row):
+        if min_strike is not None and row["Strike"] == min_strike:
+            return ["background-color:#8B0000;color:white"] * len(row)
+        if row["Strike"] in band:
+            return ["background-color:#00008B;color:white"] * len(row)
+        return [""] * len(row)
 
-        st.dataframe(
-            table.style.apply(highlight_mp, axis=1),
-            use_container_width=True,
-            height=600,
-        )
+    st.dataframe(
+        table.style.apply(highlight_mp, axis=1),
+        use_container_width=True,
+        height=600,
+    )
+
+    st.divider()
