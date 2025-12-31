@@ -55,7 +55,6 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-
 CFG = {
     "NIFTY": {
         "scrip": 13,
@@ -78,16 +77,27 @@ CFG = {
         "yahoo": "NIFTY_MID_SELECT.NS",
         "center": 13600,
     },
+    "SENSEX": {
+        "scrip": 51,                 # DHAN SENSEX scrip
+        "seg": "IDX_I",
+        "csv": "data/sensex.csv",
+        "yahoo": "^BSESN",
+        "center": 85000,
+    },
 }
 
 # =================================================
 # LOAD CSVs
 # =================================================
-df_n = pd.read_csv(CFG["NIFTY"]["csv"])
-df_b = pd.read_csv(CFG["BANKNIFTY"]["csv"])
-df_m = pd.read_csv(CFG["MIDCPNIFTY"]["csv"])
+dfs = {}
+for k, cfg in CFG.items():
+    dfs[k] = pd.read_csv(cfg["csv"])
+    dfs[k]["timestamp"] = (
+        pd.to_datetime(dfs[k]["timestamp"], errors="coerce")
+        .dt.strftime("%Y-%m-%d %H:%M")
+    )
 
-row_signature = (len(df_n), len(df_b), len(df_m))
+row_signature = tuple(len(dfs[k]) for k in CFG)
 
 if "last_row_signature" not in st.session_state:
     st.session_state.last_row_signature = row_signature
@@ -95,16 +105,8 @@ elif row_signature != st.session_state.last_row_signature:
     st.session_state.last_row_signature = row_signature
     st.rerun()
 
-for df in (df_n, df_b, df_m):
-    df["timestamp"] = (
-        pd.to_datetime(df["timestamp"], errors="coerce")
-        .dt.strftime("%Y-%m-%d %H:%M")
-    )
-
 common_times = sorted(
-    set(df_n["timestamp"])
-    .intersection(df_b["timestamp"])
-    .intersection(df_m["timestamp"]),
+    set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG]),
     reverse=True,
 )
 
@@ -114,15 +116,10 @@ common_times = sorted(
 st.subheader("⏱ Timestamp Selection")
 
 t1_full = st.selectbox("Time-1 (Latest)", common_times, index=0)
-t2_full = st.selectbox(
-    "Time-2 (Previous)",
-    common_times,
-    index=1 if len(common_times) > 1 else 0
-)
+t2_full = st.selectbox("Time-2 (Previous)", common_times, index=1)
 
-t1 = t1_full[-5:]  # HH:MM only (for column names)
+t1 = t1_full[-5:]
 t2 = t2_full[-5:]
-
 now = ist_hhmm()
 
 # =================================================
@@ -175,7 +172,6 @@ def build_max_pain(cfg):
         df[df["timestamp"] == t1_full]
         .groupby("Strike")["Max Pain"].mean() / 100
     )
-
     mp2 = (
         df[df["timestamp"] == t2_full]
         .groupby("Strike")["Max Pain"].mean() / 100
@@ -227,9 +223,9 @@ def build_max_pain(cfg):
 st.divider()
 st.subheader("📌 MAX PAIN")
 
-c1, c2, c3 = st.columns(3)
+cols = st.columns(4)
 
-for col, name in zip([c1, c2, c3], ["NIFTY", "BANKNIFTY", "MIDCPNIFTY"]):
+for col, name in zip(cols, CFG.keys()):
     cfg = CFG[name]
     table_full = build_max_pain(cfg)
     spot = get_yahoo_price(cfg["yahoo"])
@@ -250,34 +246,6 @@ for col, name in zip([c1, c2, c3], ["NIFTY", "BANKNIFTY", "MIDCPNIFTY"]):
 
         st.dataframe(
             table.style.apply(highlight_mp, axis=1),
-            use_container_width=True,
-            height=600,
-        )
-
-# =================================================
-# IV COMPARISON (UNCHANGED)
-# =================================================
-st.divider()
-st.subheader("📌 IV COMPARISON")
-
-col4, col5 = st.columns(2)
-
-for col, name in zip([col4, col5], ["NIFTY", "BANKNIFTY"]):
-    cfg = CFG[name]
-    spot = get_yahoo_price(cfg["yahoo"])
-    iv = build_iv_table(cfg, spot)
-    band = get_spot_band(iv["Strike"].tolist(), spot)
-
-    with col:
-        st.markdown(f"### {name} : {int(spot) if spot else 'N/A'}")
-
-        def highlight_iv(row):
-            if row["Strike"] in band:
-                return ["background-color:#00008B;color:white"] * len(row)
-            return [""] * len(row)
-
-        st.dataframe(
-            iv.style.apply(highlight_iv, axis=1),
             use_container_width=True,
             height=600,
         )
