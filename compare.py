@@ -7,14 +7,13 @@ from streamlit_autorefresh import st_autorefresh
 
 st_autorefresh(interval=60_000, key="auto_refresh")
 
-FACTOR = 1000
 STRIKE_RANGE = 10
 
 # =================================================
 # PAGE CONFIG
 # =================================================
 st.set_page_config(layout="wide")
-st.title("📊 INDEX")
+st.title("📊 INDEX – MAX PAIN")
 
 # =================================================
 # HELPERS
@@ -78,7 +77,7 @@ CFG = {
         "center": 13600,
     },
     "SENSEX": {
-        "scrip": 51,                 # DHAN SENSEX scrip
+        "scrip": 51,
         "seg": "IDX_I",
         "csv": "data/sensex.csv",
         "yahoo": "^BSESN",
@@ -98,7 +97,6 @@ for k, cfg in CFG.items():
     )
 
 row_signature = tuple(len(dfs[k]) for k in CFG)
-
 if "last_row_signature" not in st.session_state:
     st.session_state.last_row_signature = row_signature
 elif row_signature != st.session_state.last_row_signature:
@@ -165,17 +163,10 @@ def build_max_pain(cfg):
     below = [s for s in strikes if s <= center][-35:]
     above = [s for s in strikes if s > center][:36]
     strikes = sorted(set(below + above))
-
     df = df[df["Strike"].isin(strikes)]
 
-    mp1 = (
-        df[df["timestamp"] == t1_full]
-        .groupby("Strike")["Max Pain"].mean() / 100
-    )
-    mp2 = (
-        df[df["timestamp"] == t2_full]
-        .groupby("Strike")["Max Pain"].mean() / 100
-    )
+    mp1 = df[df["timestamp"] == t1_full].groupby("Strike")["Max Pain"].mean() / 100
+    mp2 = df[df["timestamp"] == t2_full].groupby("Strike")["Max Pain"].mean() / 100
 
     final = pd.DataFrame({
         "Strike": mp1.index,
@@ -198,7 +189,6 @@ def build_max_pain(cfg):
             })
 
         live = pd.DataFrame(rows).sort_values("Strike")
-
         A, B = live["CE LTP"], live["CE OI"]
         G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
@@ -218,7 +208,7 @@ def build_max_pain(cfg):
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 # =================================================
-# DISPLAY MAX PAIN
+# DISPLAY
 # =================================================
 st.divider()
 st.subheader("📌 MAX PAIN")
@@ -231,14 +221,19 @@ for col, name in zip(cols, CFG.keys()):
     spot = get_yahoo_price(cfg["yahoo"])
     table = atm_slice(table_full, spot)
 
+    mp_now_col = f"MP ({now})"
+    if mp_now_col in table and table[mp_now_col].notna().any():
+        min_strike = table.loc[table[mp_now_col].idxmin(), "Strike"]
+    else:
+        min_strike = None
+
     band = get_spot_band(table["Strike"].tolist(), spot)
-    min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
     with col:
         st.markdown(f"### {name} : {int(spot) if spot else 'N/A'}")
 
         def highlight_mp(row):
-            if row["Strike"] == min_strike:
+            if min_strike is not None and row["Strike"] == min_strike:
                 return ["background-color:#8B0000;color:white"] * len(row)
             if row["Strike"] in band:
                 return ["background-color:#00008B;color:white"] * len(row)
