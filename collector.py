@@ -11,11 +11,11 @@ ACCESS_TOKEN = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbkNvbnN1bWVyVHlwZSI
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
-    "NIFTY": {"scrip": 13, "seg": "IDX_I", "center": 26000},
-    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "center": 60000},
-    "MIDCPNIFTY": {"scrip": 442, "seg": "IDX_I", "center": 13600},
+    "NIFTY":       {"scrip": 13,  "seg": "IDX_I", "center": 26000},
+    "BANKNIFTY":   {"scrip": 25,  "seg": "IDX_I", "center": 60000},
+    "MIDCPNIFTY":  {"scrip": 442, "seg": "IDX_I", "center": 13600},
+    "SENSEX":      {"scrip": 51,  "seg": "IDX_I", "center": 84000},  # ✅ ADDED
 }
-
 
 HEADERS = {
     "client-id": CLIENT_ID,
@@ -23,14 +23,10 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-
-
 DATA_DIR = "data"
-
-# Ensure data directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Ensure base CSV files exist with headers
+# ================= BASE CSV =================
 BASE_COLUMNS = [
     "Strike",
     "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
@@ -39,11 +35,10 @@ BASE_COLUMNS = [
     "Max Pain",
 ]
 
-for sym in ["nifty", "banknifty", "midcpnifty"]:
+for sym in ["nifty", "banknifty", "midcpnifty", "sensex"]:  # ✅ added sensex
     path = os.path.join(DATA_DIR, f"{sym}.csv")
     if not os.path.exists(path):
         pd.DataFrame(columns=BASE_COLUMNS).to_csv(path, index=False)
-
 
 # ================= API =================
 def get_expiries(scrip, seg):
@@ -139,36 +134,21 @@ def main():
         if not rows:
             continue
 
-        df = (
-            pd.DataFrame(rows)
-            .sort_values("Strike")
-            .reset_index(drop=True)
-        )
+        df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-        # ================= IMPORTANT FIX 1 =================
-        # FORCE NUMERIC (prevents silent MP / Greek errors)
+        # FORCE NUMERIC
         num_cols = [
             "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
             "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega"
         ]
         for c in num_cols:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
-        # ================= MAX PAIN =================
+        # MAX PAIN
         df = compute_max_pain(df)
 
-        # ================= IMPORTANT FIX 2 =================
-        # COLUMN ORDER LOCK (guarantees compare.py stability)
-        df = df[
-            [
-                "Strike",
-                "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
-                "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega",
-                "timestamp",
-                "Max Pain",
-            ]
-        ]
+        # COLUMN ORDER LOCK
+        df = df[BASE_COLUMNS]
 
         out = f"{DATA_DIR}/{sym.lower()}.csv"
         df.to_csv(out, mode="a", header=not os.path.exists(out), index=False)
