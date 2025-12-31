@@ -76,7 +76,7 @@ CFG = {
         "seg": "IDX_I",
         "csv": "data/midcpnifty.csv",
         "yahoo": "NIFTY_MID_SELECT.NS",
-        "center": 12000,
+        "center": 13600,
     },
 }
 
