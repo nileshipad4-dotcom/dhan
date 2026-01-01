@@ -6,7 +6,7 @@ import os
 
 # ================= CONFIG =================
 CLIENT_ID = "1102712380"
-ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MjM0NDg5LCJpYXQiOjE3NjcxNDgwODksInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.T2icHFBVwPloEVFQQ67s4Fh9Yj8HaAru3GzZgcAdIzauwvBSSztenwz0tZudegfoA5-DhFU7FX37dN5NhCXS8A"
+ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3MzE1ODk2LCJpYXQiOjE3NjcyMjk0OTYsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.WpIf1CiWyqLGZB4DmTAwnRj8_sziPmkYzfxKJ-80oO9C85jeQ3JHR7YM1R4q-LySMuzViWUU32mhxK6HgjajXQ"
 
 API_BASE = "https://api.dhan.co/v2"
 
