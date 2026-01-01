@@ -28,15 +28,14 @@ def save_to_csv(df, symbol, expiry):
 # ================= API CONFIG =================
 CLIENT_ID = "1102712380"
 ACCESS_TOKEN = "YOUR_ACCESS_TOKEN_HERE"
-
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
-    "NIFTY": {"scrip": 13, "seg": "IDX_I", "security_id": 256265},
-    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "security_id": 260105},
-    "FINNIFTY": {"scrip": 27, "seg": "IDX_I", "security_id": 260112},
-    "MIDCAP NIFTY SELECT": {"scrip": 28, "seg": "IDX_I", "security_id": 260113},
-    "SENSEX": {"scrip": 51, "seg": "IDX_I", "security_id": 256777},
+    "NIFTY": {"scrip": 13, "seg": "IDX_I"},
+    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I"},
+    "FINNIFTY": {"scrip": 27, "seg": "IDX_I"},
+    "MIDCAP NIFTY SELECT": {"scrip": 28, "seg": "IDX_I"},
+    "SENSEX": {"scrip": 51, "seg": "IDX_I"},
 }
 
 HEADERS = {
@@ -45,24 +44,15 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# =============== PAGE CONFIG ===============
+# ================= PAGE =================
 st.set_page_config(layout="wide")
 st_autorefresh(interval=30_000, key="refresh")
 
-# =============== API FUNCTIONS ===============
-@st.cache_data(ttl=5)
-def get_index_price(security_id):
-    r = requests.post(
-        f"{API_BASE}/marketfeed/ltp",
-        headers=HEADERS,
-        json={"NSE_IDX": [security_id]}
-    )
-    if r.status_code != 200:
-        return None, None
+st.title("📊 Option Chain – DhanHQ")
 
-    data = r.json()["data"].get(str(security_id), {})
-    return data.get("ltp"), data.get("previous_close")
-
+# ================= DROPDOWNS (ALWAYS VISIBLE) =================
+symbol = st.selectbox("Select Index", list(UNDERLYINGS.keys()))
+cfg = UNDERLYINGS[symbol]
 
 @st.cache_data(ttl=120)
 def get_expiries(scrip, seg):
@@ -71,8 +61,17 @@ def get_expiries(scrip, seg):
         headers=HEADERS,
         json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg}
     )
-    return r.json().get("data", []) if r.status_code == 200 else []
+    if r.status_code != 200:
+        return []
+    return r.json().get("data", [])
 
+expiries = get_expiries(cfg["scrip"], cfg["seg"])
+
+if not expiries:
+    st.warning("No expiries available")
+    st.stop()
+
+expiry = st.selectbox("Select Expiry", expiries[:10])
 
 @st.cache_data(ttl=30)
 def get_option_chain(scrip, seg, expiry):
@@ -85,122 +84,87 @@ def get_option_chain(scrip, seg, expiry):
             "Expiry": expiry
         }
     )
-    return r.json().get("data") if r.status_code == 200 else None
+    if r.status_code != 200:
+        return None
+    return r.json().get("data")
 
+data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
 
-# =============== MAX PAIN ==================
+if not data or "oc" not in data:
+    st.warning("Option chain data not available")
+    st.stop()
+
+# ================= BUILD OPTION CHAIN =================
+oc = data["oc"]
+strikes = sorted(float(k) for k in oc.keys())
+
+rows = []
+for strike in strikes:
+    s = oc.get(f"{strike:.6f}", {})
+    ce, pe = s.get("ce", {}), s.get("pe", {})
+
+    rows.append({
+        "Strike": int(strike),
+
+        "CE LTP": ce.get("last_price"),
+        "CE OI": ce.get("oi"),
+        "CE Volume": ce.get("volume"),
+        "CE IV": int(ce["implied_volatility"] * 10000)
+        if ce.get("implied_volatility") is not None else None,
+        "CE Delta": int(ce["greeks"]["delta"] * 100000)
+        if ce.get("greeks", {}).get("delta") is not None else None,
+        "CE Gamma": int(ce["greeks"]["gamma"] * 10000000)
+        if ce.get("greeks", {}).get("gamma") is not None else None,
+        "CE Vega": int(ce["greeks"]["vega"] * 10000)
+        if ce.get("greeks", {}).get("vega") is not None else None,
+
+        "PE LTP": pe.get("last_price"),
+        "PE OI": pe.get("oi"),
+        "PE Volume": pe.get("volume"),
+        "PE IV": int(pe["implied_volatility"] * 10000)
+        if pe.get("implied_volatility") is not None else None,
+        "PE Delta": int(pe["greeks"]["delta"] * 100000)
+        if pe.get("greeks", {}).get("delta") is not None else None,
+        "PE Gamma": int(pe["greeks"]["gamma"] * 10000000)
+        if pe.get("greeks", {}).get("gamma") is not None else None,
+        "PE Vega": int(pe["greeks"]["vega"] * 10000)
+        if pe.get("greeks", {}).get("vega") is not None else None,
+    })
+
+df = pd.DataFrame(rows)
+
+# ================= MAX PAIN =================
 def compute_max_pain(df):
     A = df["CE LTP"].fillna(0).values
     B = df["CE OI"].fillna(0).values
-    G = df["Strike"].fillna(0).values
+    G = df["Strike"].values
     L = df["PE OI"].fillna(0).values
     M = df["PE LTP"].fillna(0).values
 
-    U = []
+    mp = []
     for i in range(len(df)):
         Q = -sum(A[i:] * B[i:])
         R = G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
         S = -sum(M[:i] * L[:i])
         T = sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        U.append(int((Q + R + S + T) / 10000))
+        mp.append(int((Q + R + S + T) / 10000))
 
-    df["Max Pain"] = U
+    df["Max Pain"] = mp
     return df
 
-
-# =============== UI =========================
-st.title("📊 Option Chain – DhanHQ")
-
-# ---- INDEX DROPDOWN ----
-symbol = st.selectbox("Select Index", list(UNDERLYINGS.keys()))
-cfg = UNDERLYINGS[symbol]
-
-# ---- LIVE PRICE ----
-index_ltp, prev_close = get_index_price(cfg["security_id"])
-pct_change = ((index_ltp - prev_close) / prev_close * 100) if index_ltp and prev_close else None
-
-c1, c2, c3 = st.columns(3)
-c1.metric("Current Price", f"{index_ltp:.2f}" if index_ltp else "N/A")
-c2.metric("Previous Close", f"{prev_close:.2f}" if prev_close else "N/A")
-c3.metric("% Change", f"{pct_change:.2f}%" if pct_change else "N/A")
-
-# ---- EXPIRY DROPDOWN ----
-expiries = get_expiries(cfg["scrip"], cfg["seg"])
-if not expiries:
-    st.stop()
-
-expiry_list = expiries[:10]
-
-expiry = st.selectbox("Select Expiry", expiry_list)
-
-# ---- OPTION CHAIN ----
-data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
-if not data:
-    st.stop()
-
-oc = data["oc"]
-strikes = sorted(float(k) for k in oc.keys())
-
-# ---- CENTER STRIKE ----
-if index_ltp is not None:
-    center = min(strikes, key=lambda x: abs(x - index_ltp))
-else:
-    center = strikes[len(strikes) // 2]
-
-idx = strikes.index(center)
-selected_strikes = strikes[max(0, idx - 20): idx + 21]
-
-# ---- BUILD TABLE ----
-rows = []
-for strike in selected_strikes:
-    s = oc.get(f"{strike:.6f}", {})
-    ce, pe = s.get("ce", {}), s.get("pe", {})
-
-    rows.append({
-        "Strike": int(round(strike)),
-
-        "CE LTP": round(ce["last_price"], 2) if ce.get("last_price") else None,
-        "CE OI": ce.get("oi"),
-        "CE Volume": ce.get("volume"),
-        "CE IV": int(ce["implied_volatility"] * 10000) if ce.get("implied_volatility") is not None else None,
-        "CE Delta": int(ce["greeks"]["delta"] * 100000) if ce.get("greeks", {}).get("delta") is not None else None,
-        "CE Gamma": int(ce["greeks"]["gamma"] * 10000000) if ce.get("greeks", {}).get("gamma") is not None else None,
-        "CE Vega": int(ce["greeks"]["vega"] * 10000) if ce.get("greeks", {}).get("vega") is not None else None,
-
-        "PE LTP": round(pe["last_price"], 2) if pe.get("last_price") else None,
-        "PE OI": pe.get("oi"),
-        "PE Volume": pe.get("volume"),
-        "PE IV": int(pe["implied_volatility"] * 10000) if pe.get("implied_volatility") is not None else None,
-        "PE Delta": int(pe["greeks"]["delta"] * 100000) if pe.get("greeks", {}).get("delta") is not None else None,
-        "PE Gamma": int(pe["greeks"]["gamma"] * 10000000) if pe.get("greeks", {}).get("gamma") is not None else None,
-        "PE Vega": int(pe["greeks"]["vega"] * 10000) if pe.get("greeks", {}).get("vega") is not None else None,
-    })
-
-df = pd.DataFrame(rows)
-
-# ---- MAX PAIN + CSV ----
 df = compute_max_pain(df)
 df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
 save_to_csv(df, symbol, expiry)
 
-true_max_pain_strike = df.loc[df["Max Pain"].idxmin(), "Strike"]
+# ================= DISPLAY =================
+true_mp = df.loc[df["Max Pain"].idxmin(), "Strike"]
 
-# ---- ATM STRIKES ----
-if index_ltp is not None:
-    lower = max(df["Strike"][df["Strike"] <= index_ltp], default=None)
-    upper = min(df["Strike"][df["Strike"] >= index_ltp], default=None)
-else:
-    lower = upper = None
-
-# ---- HIGHLIGHTING ----
-def highlight_rows(row):
-    if row["Strike"] == true_max_pain_strike:
+def highlight(row):
+    if row["Strike"] == true_mp:
         return ["background-color:#8B0000;color:white"] * len(row)
-    if row["Strike"] in [lower, upper]:
-        return ["background-color:#003366;color:white"] * len(row)
     return [""] * len(row)
 
-st.dataframe(df.style.apply(highlight_rows, axis=1), use_container_width=True)
+st.dataframe(df.style.apply(highlight, axis=1), use_container_width=True)
 
 st.caption(f"⏱ Auto-refresh every 30 seconds | {datetime.now().strftime('%H:%M:%S')}")
