@@ -4,26 +4,8 @@ import streamlit as st
 import requests
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
-
-# ================= CSV STORAGE =================
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-def save_to_csv(df, symbol, expiry):
-    fname = f"{symbol.lower().replace(' ', '_')}_{expiry}.csv"
-    file_path = f"{DATA_DIR}/{fname}"
-
-    if os.path.exists(file_path):
-        existing = pd.read_csv(file_path)
-        last_time = pd.to_datetime(existing["timestamp"]).max()
-        if (datetime.now() - last_time).total_seconds() < 300:
-            return
-        df.to_csv(file_path, mode="a", header=False, index=False)
-    else:
-        df.to_csv(file_path, index=False)
-
 
 # ================= API CONFIG =================
 CLIENT_ID = "1102712380"
@@ -32,11 +14,30 @@ ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
-    "NIFTY": {"scrip": 13, "seg": "IDX_I"},
-    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I"},
-    "FINNIFTY": {"scrip": 27, "seg": "IDX_I"},
-    "MIDCAP NIFTY SELECT": {"scrip": 28, "seg": "IDX_I"},
-    "SENSEX": {"scrip": 51, "seg": "IDX_I"},
+    "NIFTY": {
+        "security_id": 256265,
+        "scrip": 13,
+        "seg": "IDX_I",
+        "center": 26000
+    },
+    "BANKNIFTY": {
+        "security_id": 260105,
+        "scrip": 25,
+        "seg": "IDX_I",
+        "center": 60000
+    },
+    "MIDCAP NIFTY SELECT": {
+        "security_id": 260113,
+        "scrip": 28,
+        "seg": "IDX_I",
+        "center": 13600
+    },
+    "SENSEX": {
+        "security_id": 256777,
+        "scrip": 51,
+        "seg": "IDX_I",
+        "center": 84000
+    },
 }
 
 HEADERS = {
@@ -48,33 +49,29 @@ HEADERS = {
 # ================= PAGE =================
 st.set_page_config(layout="wide")
 st_autorefresh(interval=30_000, key="refresh")
+st.title("📊 Option Chain – Max Pain (Collector Logic)")
 
-st.title("📊 Option Chain – DhanHQ")
-
-# ================= DROPDOWNS (ALWAYS VISIBLE) =================
+# ================= DROPDOWNS =================
 symbol = st.selectbox("Select Index", list(UNDERLYINGS.keys()))
 cfg = UNDERLYINGS[symbol]
 
-@st.cache_data(ttl=120)
+# ================= EXPIRIES =================
 def get_expiries(scrip, seg):
     r = requests.post(
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
         json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg}
     )
-    if r.status_code != 200:
-        return []
-    return r.json().get("data", [])
+    return r.json().get("data", []) if r.status_code == 200 else []
 
 expiries = get_expiries(cfg["scrip"], cfg["seg"])
-
 if not expiries:
-    st.warning("No expiries available")
+    st.error("No expiries returned by API")
     st.stop()
 
-expiry = st.selectbox("Select Expiry", expiries[:10])
+expiry = st.selectbox("Select Expiry (next 10)", expiries[:10])
 
-@st.cache_data(ttl=30)
+# ================= OPTION CHAIN =================
 def get_option_chain(scrip, seg, expiry):
     r = requests.post(
         f"{API_BASE}/optionchain",
@@ -85,87 +82,93 @@ def get_option_chain(scrip, seg, expiry):
             "Expiry": expiry
         }
     )
-    if r.status_code != 200:
-        return None
-    return r.json().get("data")
+    return r.json().get("data") if r.status_code == 200 else None
 
 data = get_option_chain(cfg["scrip"], cfg["seg"], expiry)
-
 if not data or "oc" not in data:
-    st.warning("Option chain data not available")
+    st.error("Option chain data not available")
     st.stop()
 
-# ================= BUILD OPTION CHAIN =================
 oc = data["oc"]
-strikes = sorted(float(k) for k in oc.keys())
+strikes = sorted(float(s) for s in oc.keys())
 
+# ================= STRIKE SELECTION (EXACT MATCH) =================
+center = cfg["center"]
+
+below = [s for s in strikes if s <= center][-35:]
+above = [s for s in strikes if s > center][:36]
+selected = sorted(set(below + above))
+
+# ================= BUILD TABLE =================
 rows = []
-for strike in strikes:
-    s = oc.get(f"{strike:.6f}", {})
-    ce, pe = s.get("ce", {}), s.get("pe", {})
+for s in selected:
+    v = oc.get(f"{s:.6f}", {})
+    ce, pe = v.get("ce", {}), v.get("pe", {})
 
     rows.append({
-        "Strike": int(strike),
+        "Strike": int(s),
 
         "CE LTP": ce.get("last_price"),
         "CE OI": ce.get("oi"),
-        "CE Volume": ce.get("volume"),
-        "CE IV": int(ce["implied_volatility"] * 10000)
-        if ce.get("implied_volatility") is not None else None,
-        "CE Delta": int(ce["greeks"]["delta"] * 100000)
-        if ce.get("greeks", {}).get("delta") is not None else None,
-        "CE Gamma": int(ce["greeks"]["gamma"] * 10000000)
-        if ce.get("greeks", {}).get("gamma") is not None else None,
-        "CE Vega": int(ce["greeks"]["vega"] * 10000)
-        if ce.get("greeks", {}).get("vega") is not None else None,
+        "CE IV": ce.get("implied_volatility"),
+        "CE Delta": ce.get("greeks", {}).get("delta"),
+        "CE Gamma": ce.get("greeks", {}).get("gamma"),
+        "CE Vega": ce.get("greeks", {}).get("vega"),
 
         "PE LTP": pe.get("last_price"),
         "PE OI": pe.get("oi"),
-        "PE Volume": pe.get("volume"),
-        "PE IV": int(pe["implied_volatility"] * 10000)
-        if pe.get("implied_volatility") is not None else None,
-        "PE Delta": int(pe["greeks"]["delta"] * 100000)
-        if pe.get("greeks", {}).get("delta") is not None else None,
-        "PE Gamma": int(pe["greeks"]["gamma"] * 10000000)
-        if pe.get("greeks", {}).get("gamma") is not None else None,
-        "PE Vega": int(pe["greeks"]["vega"] * 10000)
-        if pe.get("greeks", {}).get("vega") is not None else None,
+        "PE IV": pe.get("implied_volatility"),
+        "PE Delta": pe.get("greeks", {}).get("delta"),
+        "PE Gamma": pe.get("greeks", {}).get("gamma"),
+        "PE Vega": pe.get("greeks", {}).get("vega"),
     })
 
-df = pd.DataFrame(rows)
+df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
-# ================= MAX PAIN =================
+# ================= FORCE NUMERIC (IDENTICAL) =================
+num_cols = [
+    "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
+    "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega"
+]
+for c in num_cols:
+    df[c] = pd.to_numeric(df[c], errors="coerce")
+
+# ================= MAX PAIN (IDENTICAL FORMULA) =================
 def compute_max_pain(df):
-    A = df["CE LTP"].fillna(0).values
-    B = df["CE OI"].fillna(0).values
-    G = df["Strike"].values
-    L = df["PE OI"].fillna(0).values
-    M = df["PE LTP"].fillna(0).values
+    A = df["CE LTP"].fillna(0)
+    B = df["CE OI"].fillna(0)
+    G = df["Strike"]
+    L = df["PE OI"].fillna(0)
+    M = df["PE LTP"].fillna(0)
 
     mp = []
     for i in range(len(df)):
-        Q = -sum(A[i:] * B[i:])
-        R = G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
-        S = -sum(M[:i] * L[:i])
-        T = sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        mp.append(int((Q + R + S + T) / 10000))
+        mp.append(int((
+            -sum(A[i:] * B[i:])
+            + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
+            - sum(M[:i] * L[:i])
+            + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
+        ) / 10000))
 
     df["Max Pain"] = mp
     return df
 
 df = compute_max_pain(df)
-df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-save_to_csv(df, symbol, expiry)
 
 # ================= DISPLAY =================
-true_mp = df.loc[df["Max Pain"].idxmin(), "Strike"]
+true_mp_strike = df.loc[df["Max Pain"].idxmin(), "Strike"]
 
-def highlight(row):
-    if row["Strike"] == true_mp:
+def highlight_rows(row):
+    if row["Strike"] == true_mp_strike:
         return ["background-color:#8B0000;color:white"] * len(row)
     return [""] * len(row)
 
-st.dataframe(df.style.apply(highlight, axis=1), use_container_width=True)
+st.dataframe(
+    df.style.apply(highlight_rows, axis=1),
+    use_container_width=True
+)
 
-st.caption(f"⏱ Auto-refresh every 30 seconds | {datetime.now().strftime('%H:%M:%S')}")
+st.caption(
+    f"⏱ Auto-refresh every 30 seconds | "
+    f"{(datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime('%H:%M:%S')}"
+)
