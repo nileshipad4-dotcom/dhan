@@ -7,7 +7,7 @@ from streamlit_autorefresh import st_autorefresh
 
 st_autorefresh(interval=60_000, key="auto_refresh")
 
-STRIKE_RANGE = 10
+STRIKE_RANGE = 10   # ATM ±10 (≈ 21 strikes total)
 
 # =================================================
 # PAGE CONFIG
@@ -106,48 +106,50 @@ common_times = sorted(
 # =================================================
 st.subheader("⏱ Timestamp Selection")
 
-t1_full = st.selectbox("Time-1 (Latest)", common_times, index=0)
-t2_full = st.selectbox("Time-2 (Previous)", common_times, index=1)
+t1_full = st.selectbox("Time-1 (Latest)", common_times, 0)
+t2_full = st.selectbox("Time-2 (Previous)", common_times, 1)
 
 t1 = t1_full[-5:]
 t2 = t2_full[-5:]
 now = ist_hhmm()
 
 # =================================================
-# EXPIRY LIST (NIFTY ONLY)
+# NIFTY EXPIRY SELECTION (FIXED)
 # =================================================
 @st.cache_data(ttl=300)
 def get_expiry_list(cfg):
-    res = requests.post(
-        f"{API_BASE}/optionchain/expirylist",
-        headers=HEADERS,
-        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
-    ).json()
-    return res.get("data", [])
+    try:
+        r = requests.post(
+            f"{API_BASE}/optionchain/expirylist",
+            headers=HEADERS,
+            json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
+            timeout=5,
+        ).json()
+        return r.get("data", []) or []
+    except Exception:
+        return []
 
 nifty_expiries = get_expiry_list(CFG["NIFTY"])
 
 st.subheader("📅 NIFTY Expiry Selection")
-selected_nifty_expiry = st.selectbox(
-    "Select NIFTY Expiry",
-    nifty_expiries,
-    index=0 if nifty_expiries else None,
-)
+if nifty_expiries:
+    selected_nifty_expiry = st.selectbox(
+        "Select NIFTY Expiry",
+        nifty_expiries,
+        index=0,
+    )
+else:
+    st.warning("⚠️ NIFTY expiry list not available")
+    selected_nifty_expiry = None
 
 # =================================================
 # OPTION CHAIN
 # =================================================
 @st.cache_data(ttl=30)
-def fetch_live_oc(cfg, expiry_override=None):
-    if expiry_override is None:
-        exp = get_expiry_list(cfg)
-        if not exp:
-            return None
-        expiry = exp[0]
-    else:
-        expiry = expiry_override
-
-    return requests.post(
+def fetch_live_oc(cfg, expiry):
+    if not expiry:
+        return None
+    r = requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
         json={
@@ -155,12 +157,14 @@ def fetch_live_oc(cfg, expiry_override=None):
             "UnderlyingSeg": cfg["seg"],
             "Expiry": expiry,
         },
-    ).json().get("data", {}).get("oc")
+        timeout=5,
+    ).json()
+    return r.get("data", {}).get("oc")
 
 # =================================================
 # MAX PAIN
 # =================================================
-def build_max_pain(cfg, expiry_override=None):
+def build_max_pain(cfg, expiry=None):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
@@ -188,7 +192,7 @@ def build_max_pain(cfg, expiry_override=None):
         f"MP ({t2})": mp2.reindex(mp1.index).values,
     })
 
-    oc = fetch_live_oc(cfg, expiry_override)
+    oc = fetch_live_oc(cfg, expiry)
     if oc:
         rows = []
         for s in strikes:
@@ -221,7 +225,7 @@ def build_max_pain(cfg, expiry_override=None):
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 # =================================================
-# DISPLAY
+# DISPLAY (HIGHLIGHTS RESTORED)
 # =================================================
 st.divider()
 st.subheader("📌 MAX PAIN")
@@ -229,7 +233,7 @@ st.subheader("📌 MAX PAIN")
 for name, cfg in CFG.items():
 
     expiry = selected_nifty_expiry if name == "NIFTY" else None
-    table_full = build_max_pain(cfg, expiry_override=expiry)
+    table_full = build_max_pain(cfg, expiry)
 
     spot = get_yahoo_price(cfg["yahoo"])
     table = atm_slice(table_full, spot)
