@@ -7,7 +7,7 @@ from streamlit_autorefresh import st_autorefresh
 
 st_autorefresh(interval=60_000, key="auto_refresh")
 
-STRIKE_RANGE = 10   # ATM ±10 (≈ 21 strikes total)
+STRIKE_RANGE = 10
 
 # =================================================
 # PAGE CONFIG
@@ -50,7 +50,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "YOUR_TOKEN_HERE",
+    "access-token": "PUT_YOUR_VALID_TOKEN_HERE",
     "Content-Type": "application/json",
 }
 
@@ -114,7 +114,7 @@ t2 = t2_full[-5:]
 now = ist_hhmm()
 
 # =================================================
-# NIFTY EXPIRY SELECTION (FIXED)
+# NIFTY EXPIRY LIST (CORRECT & VERIFIED)
 # =================================================
 @st.cache_data(ttl=300)
 def get_expiry_list(cfg):
@@ -122,28 +122,35 @@ def get_expiry_list(cfg):
         r = requests.post(
             f"{API_BASE}/optionchain/expirylist",
             headers=HEADERS,
-            json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
-            timeout=5,
+            json={
+                "UnderlyingScrip": cfg["scrip"],
+                "UnderlyingSeg": cfg["seg"],
+            },
+            timeout=10,
         ).json()
-        return r.get("data", []) or []
-    except Exception:
+        expiries = r.get("data", [])
+        return sorted(expiries) if isinstance(expiries, list) else []
+    except Exception as e:
+        st.error(f"Expiry API error: {e}")
         return []
+
+st.subheader("📅 NIFTY Expiry (LIVE OC ONLY)")
 
 nifty_expiries = get_expiry_list(CFG["NIFTY"])
 
-st.subheader("📅 NIFTY Expiry Selection")
 if nifty_expiries:
     selected_nifty_expiry = st.selectbox(
         "Select NIFTY Expiry",
         nifty_expiries,
         index=0,
     )
+    st.caption(f"LIVE expiry in use: {selected_nifty_expiry}")
 else:
-    st.warning("⚠️ NIFTY expiry list not available")
+    st.error("❌ No NIFTY expiries returned from API")
     selected_nifty_expiry = None
 
 # =================================================
-# OPTION CHAIN
+# LIVE OPTION CHAIN (EXPIRY-AWARE)
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc(cfg, expiry):
@@ -157,7 +164,7 @@ def fetch_live_oc(cfg, expiry):
             "UnderlyingSeg": cfg["seg"],
             "Expiry": expiry,
         },
-        timeout=5,
+        timeout=10,
     ).json()
     return r.get("data", {}).get("oc")
 
@@ -225,7 +232,7 @@ def build_max_pain(cfg, expiry=None):
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 # =================================================
-# DISPLAY (HIGHLIGHTS RESTORED)
+# DISPLAY
 # =================================================
 st.divider()
 st.subheader("📌 MAX PAIN")
