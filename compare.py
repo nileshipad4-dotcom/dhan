@@ -57,7 +57,7 @@ HEADERS = {
 CFG = {
     "NIFTY": {
         "scrip": 13,
-        "seg": "IDX_I",   # REQUIRED FOR OPTIONCHAIN
+        "seg": "IDX_I",
         "csv": "data/nifty.csv",
         "yahoo": "^NSEI",
         "center": 26000,
@@ -114,46 +114,46 @@ t2 = t2_full[-5:]
 now = ist_hhmm()
 
 # =================================================
-# NIFTY EXPIRY LIST (CRITICAL FIX)
+# 🔥 EXPIRY DISCOVERY VIA OPTIONCHAIN (ROBUST)
 # =================================================
-@st.cache_data(ttl=300)
-def get_expiry_list(cfg):
+@st.cache_data(ttl=60)
+def discover_expiries_from_optionchain(cfg):
     """
-    Dhan expirylist REQUIRES UnderlyingSeg='IDX'
-    (NOT IDX_I)
+    Calls optionchain once and extracts all expiries.
+    Works even when expirylist API fails.
     """
-    try:
-        r = requests.post(
-            f"{API_BASE}/optionchain/expirylist",
-            headers=HEADERS,
-            json={
-                "UnderlyingScrip": cfg["scrip"],
-                "UnderlyingSeg": "IDX",   # 🔴 FIX
-            },
-            timeout=10,
-        ).json()
+    r = requests.post(
+        f"{API_BASE}/optionchain",
+        headers=HEADERS,
+        json={
+            "UnderlyingScrip": cfg["scrip"],
+            "UnderlyingSeg": cfg["seg"],
+        },
+        timeout=10,
+    ).json()
 
-        expiries = r.get("data", [])
-        return sorted(expiries) if isinstance(expiries, list) else []
+    data = r.get("data", {})
+    expiries = data.get("expiryDates") or data.get("expiries")
 
-    except Exception as e:
-        st.error(f"Expiry API error: {e}")
-        return []
+    if isinstance(expiries, list):
+        return sorted(expiries)
 
-st.subheader("📅 NIFTY Expiry (LIVE OC ONLY)")
+    return []
 
-nifty_expiries = get_expiry_list(CFG["NIFTY"])
+st.subheader("📅 NIFTY Expiry (LIVE OC)")
 
-if nifty_expiries:
+nifty_expiries = discover_expiries_from_optionchain(CFG["NIFTY"])
+
+if not nifty_expiries:
+    st.error("❌ Could not fetch NIFTY expiries (optionchain)")
+    selected_nifty_expiry = None
+else:
     selected_nifty_expiry = st.selectbox(
         "Select NIFTY Expiry",
         nifty_expiries,
         index=0,
     )
-    st.caption(f"LIVE expiry in use: {selected_nifty_expiry}")
-else:
-    st.error("❌ No NIFTY expiries returned from API")
-    selected_nifty_expiry = None
+    st.caption(f"Using LIVE expiry: {selected_nifty_expiry}")
 
 # =================================================
 # LIVE OPTION CHAIN (EXPIRY AWARE)
@@ -168,7 +168,7 @@ def fetch_live_oc(cfg, expiry):
         headers=HEADERS,
         json={
             "UnderlyingScrip": cfg["scrip"],
-            "UnderlyingSeg": cfg["seg"],  # IDX_I (CORRECT)
+            "UnderlyingSeg": cfg["seg"],
             "Expiry": expiry,
         },
         timeout=10,
@@ -240,7 +240,7 @@ def build_max_pain(cfg, expiry=None):
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 # =================================================
-# DISPLAY (HIGHLIGHTS + STRIKE WINDOW PRESERVED)
+# DISPLAY
 # =================================================
 st.divider()
 st.subheader("📌 MAX PAIN")
