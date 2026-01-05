@@ -57,7 +57,7 @@ HEADERS = {
 CFG = {
     "NIFTY": {
         "scrip": 13,
-        "seg": "IDX_I",
+        "seg": "IDX_I",   # REQUIRED FOR OPTIONCHAIN
         "csv": "data/nifty.csv",
         "yahoo": "^NSEI",
         "center": 26000,
@@ -114,22 +114,28 @@ t2 = t2_full[-5:]
 now = ist_hhmm()
 
 # =================================================
-# NIFTY EXPIRY LIST (CORRECT & VERIFIED)
+# NIFTY EXPIRY LIST (CRITICAL FIX)
 # =================================================
 @st.cache_data(ttl=300)
 def get_expiry_list(cfg):
+    """
+    Dhan expirylist REQUIRES UnderlyingSeg='IDX'
+    (NOT IDX_I)
+    """
     try:
         r = requests.post(
             f"{API_BASE}/optionchain/expirylist",
             headers=HEADERS,
             json={
                 "UnderlyingScrip": cfg["scrip"],
-                "UnderlyingSeg": cfg["seg"],
+                "UnderlyingSeg": "IDX",   # 🔴 FIX
             },
             timeout=10,
         ).json()
+
         expiries = r.get("data", [])
         return sorted(expiries) if isinstance(expiries, list) else []
+
     except Exception as e:
         st.error(f"Expiry API error: {e}")
         return []
@@ -150,22 +156,24 @@ else:
     selected_nifty_expiry = None
 
 # =================================================
-# LIVE OPTION CHAIN (EXPIRY-AWARE)
+# LIVE OPTION CHAIN (EXPIRY AWARE)
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc(cfg, expiry):
     if not expiry:
         return None
+
     r = requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
         json={
             "UnderlyingScrip": cfg["scrip"],
-            "UnderlyingSeg": cfg["seg"],
+            "UnderlyingSeg": cfg["seg"],  # IDX_I (CORRECT)
             "Expiry": expiry,
         },
         timeout=10,
     ).json()
+
     return r.get("data", {}).get("oc")
 
 # =================================================
@@ -232,7 +240,7 @@ def build_max_pain(cfg, expiry=None):
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 # =================================================
-# DISPLAY
+# DISPLAY (HIGHLIGHTS + STRIKE WINDOW PRESERVED)
 # =================================================
 st.divider()
 st.subheader("📌 MAX PAIN")
