@@ -50,7 +50,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3NjY2MDQxLCJpYXQiOjE3Njc1Nzk2NDEsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.MWAs2LD6tgzLXPZektrgWQ3MPZWhKpzg-FWcOvdqsoAOpHwignBRLdeEi6GmE2L4ReqZGcrK2TfAOkEDbQT1yg",
+    "access-token": "YOUR_TOKEN_HERE",
     "Content-Type": "application/json",
 }
 
@@ -96,13 +96,6 @@ for k, cfg in CFG.items():
         .dt.strftime("%Y-%m-%d %H:%M")
     )
 
-row_signature = tuple(len(dfs[k]) for k in CFG)
-if "last_row_signature" not in st.session_state:
-    st.session_state.last_row_signature = row_signature
-elif row_signature != st.session_state.last_row_signature:
-    st.session_state.last_row_signature = row_signature
-    st.rerun()
-
 common_times = sorted(
     set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG]),
     reverse=True,
@@ -121,18 +114,38 @@ t2 = t2_full[-5:]
 now = ist_hhmm()
 
 # =================================================
-# OPTION CHAIN
+# EXPIRY LIST (NIFTY ONLY)
 # =================================================
-@st.cache_data(ttl=30)
-def fetch_live_oc(cfg):
-    exp = requests.post(
+@st.cache_data(ttl=300)
+def get_expiry_list(cfg):
+    res = requests.post(
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
         json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
-    ).json().get("data", [])
+    ).json()
+    return res.get("data", [])
 
-    if not exp:
-        return None
+nifty_expiries = get_expiry_list(CFG["NIFTY"])
+
+st.subheader("📅 NIFTY Expiry Selection")
+selected_nifty_expiry = st.selectbox(
+    "Select NIFTY Expiry",
+    nifty_expiries,
+    index=0 if nifty_expiries else None,
+)
+
+# =================================================
+# OPTION CHAIN
+# =================================================
+@st.cache_data(ttl=30)
+def fetch_live_oc(cfg, expiry_override=None):
+    if expiry_override is None:
+        exp = get_expiry_list(cfg)
+        if not exp:
+            return None
+        expiry = exp[0]
+    else:
+        expiry = expiry_override
 
     return requests.post(
         f"{API_BASE}/optionchain",
@@ -140,14 +153,14 @@ def fetch_live_oc(cfg):
         json={
             "UnderlyingScrip": cfg["scrip"],
             "UnderlyingSeg": cfg["seg"],
-            "Expiry": exp[0],
+            "Expiry": expiry,
         },
     ).json().get("data", {}).get("oc")
 
 # =================================================
 # MAX PAIN
 # =================================================
-def build_max_pain(cfg):
+def build_max_pain(cfg, expiry_override=None):
     df = pd.read_csv(cfg["csv"])
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
@@ -175,7 +188,7 @@ def build_max_pain(cfg):
         f"MP ({t2})": mp2.reindex(mp1.index).values,
     })
 
-    oc = fetch_live_oc(cfg)
+    oc = fetch_live_oc(cfg, expiry_override)
     if oc:
         rows = []
         for s in strikes:
@@ -215,22 +228,22 @@ st.subheader("📌 MAX PAIN")
 
 for name, cfg in CFG.items():
 
-    table_full = build_max_pain(cfg)
+    expiry = selected_nifty_expiry if name == "NIFTY" else None
+    table_full = build_max_pain(cfg, expiry_override=expiry)
+
     spot = get_yahoo_price(cfg["yahoo"])
     table = atm_slice(table_full, spot)
 
     mp_now_col = f"MP ({now})"
-    if mp_now_col in table and table[mp_now_col].notna().any():
-        min_strike = table.loc[table[mp_now_col].idxmin(), "Strike"]
-    else:
-        min_strike = None
+    min_strike = (
+        table.loc[table[mp_now_col].idxmin(), "Strike"]
+        if mp_now_col in table and table[mp_now_col].notna().any()
+        else None
+    )
 
     band = get_spot_band(table["Strike"].tolist(), spot)
 
-    st.markdown(
-        f"## {name} : {int(spot) if spot else 'N/A'}",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"## {name} : {int(spot) if spot else 'N/A'}")
 
     def highlight_mp(row):
         if min_strike is not None and row["Strike"] == min_strike:
