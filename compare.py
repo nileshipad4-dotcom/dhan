@@ -5,6 +5,9 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
+# =================================================
+# AUTO REFRESH
+# =================================================
 st_autorefresh(interval=60_000, key="auto_refresh")
 
 STRIKE_RANGE = 10
@@ -21,36 +24,46 @@ st.title("📊 INDEX – MAX PAIN")
 def ist_hhmm():
     return (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%H:%M")
 
+
 @st.cache_data(ttl=30)
 def get_yahoo_price(symbol):
     try:
         data = yf.Ticker(symbol).history(period="1d", interval="1m")
-        return float(data["Close"].iloc[-1]) if not data.empty else None
+        if data.empty:
+            return None
+        return float(data["Close"].iloc[-1])
     except Exception:
         return None
+
 
 def atm_slice(df, spot, n=STRIKE_RANGE):
     if df.empty or spot is None:
         return df
+
     atm = min(df["Strike"], key=lambda x: abs(x - spot))
     idx = df.index[df["Strike"] == atm][0]
-    return df.iloc[max(0, idx-n): idx+n+1].reset_index(drop=True)
+
+    return df.iloc[max(0, idx - n): idx + n + 1].reset_index(drop=True)
+
 
 def get_spot_band(strikes, spot):
     if spot is None:
         return set()
+
     lower = max([s for s in strikes if s <= spot], default=None)
     upper = min([s for s in strikes if s > spot], default=None)
+
     return {lower, upper}
 
+
 # =================================================
-# CONFIG
+# API CONFIG
 # =================================================
 API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "PUT_YOUR_VALID_TOKEN_HERE",
+    "access-token": "YOUR_ACCESS_TOKEN",
     "Content-Type": "application/json",
 }
 
@@ -89,12 +102,22 @@ CFG = {
 # LOAD CSVs
 # =================================================
 dfs = {}
-for k, cfg in CFG.items():
-    dfs[k] = pd.read_csv(cfg["csv"])
-    dfs[k]["timestamp"] = (
-        pd.to_datetime(dfs[k]["timestamp"], errors="coerce")
+
+for name, cfg in CFG.items():
+    df = pd.read_csv(cfg["csv"])
+    df["timestamp"] = (
+        pd.to_datetime(df["timestamp"], errors="coerce")
         .dt.strftime("%Y-%m-%d %H:%M")
     )
+    dfs[name] = df
+
+# Auto-refresh if new rows appear
+row_signature = tuple(len(dfs[k]) for k in CFG)
+if "last_row_signature" not in st.session_state:
+    st.session_state.last_row_signature = row_signature
+elif row_signature != st.session_state.last_row_signature:
+    st.session_state.last_row_signature = row_signature
+    st.rerun()
 
 common_times = sorted(
     set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG]),
@@ -106,87 +129,57 @@ common_times = sorted(
 # =================================================
 st.subheader("⏱ Timestamp Selection")
 
-t1_full = st.selectbox("Time-1 (Latest)", common_times, 0)
-t2_full = st.selectbox("Time-2 (Previous)", common_times, 1)
+t1_full = st.selectbox("Time-1 (Latest)", common_times, index=0)
+t2_full = st.selectbox("Time-2 (Previous)", common_times, index=1)
 
 t1 = t1_full[-5:]
 t2 = t2_full[-5:]
 now = ist_hhmm()
 
 # =================================================
-# 🔥 EXPIRY DISCOVERY VIA OPTIONCHAIN (ROBUST)
-# =================================================
-@st.cache_data(ttl=60)
-def discover_expiries_from_optionchain(cfg):
-    """
-    Calls optionchain once and extracts all expiries.
-    Works even when expirylist API fails.
-    """
-    r = requests.post(
-        f"{API_BASE}/optionchain",
-        headers=HEADERS,
-        json={
-            "UnderlyingScrip": cfg["scrip"],
-            "UnderlyingSeg": cfg["seg"],
-        },
-        timeout=10,
-    ).json()
-
-    data = r.get("data", {})
-    expiries = data.get("expiryDates") or data.get("expiries")
-
-    if isinstance(expiries, list):
-        return sorted(expiries)
-
-    return []
-
-st.subheader("📅 NIFTY Expiry (LIVE OC)")
-
-nifty_expiries = discover_expiries_from_optionchain(CFG["NIFTY"])
-
-if not nifty_expiries:
-    st.error("❌ Could not fetch NIFTY expiries (optionchain)")
-    selected_nifty_expiry = None
-else:
-    selected_nifty_expiry = st.selectbox(
-        "Select NIFTY Expiry",
-        nifty_expiries,
-        index=0,
-    )
-    st.caption(f"Using LIVE expiry: {selected_nifty_expiry}")
-
-# =================================================
-# LIVE OPTION CHAIN (EXPIRY AWARE)
+# OPTION CHAIN (DEFAULT EXPIRY)
 # =================================================
 @st.cache_data(ttl=30)
-def fetch_live_oc(cfg, expiry):
-    if not expiry:
+def fetch_live_oc(cfg):
+    exp_resp = requests.post(
+        f"{API_BASE}/optionchain/expirylist",
+        headers=HEADERS,
+        json={
+            "UnderlyingScrip": cfg["scrip"],
+            "UnderlyingSeg": cfg["seg"],
+        },
+    ).json()
+
+    expiries = exp_resp.get("data", [])
+    if not expiries:
         return None
 
-    r = requests.post(
+    oc_resp = requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
         json={
             "UnderlyingScrip": cfg["scrip"],
             "UnderlyingSeg": cfg["seg"],
-            "Expiry": expiry,
+            "Expiry": expiries[0],  # default expiry
         },
-        timeout=10,
     ).json()
 
-    return r.get("data", {}).get("oc")
+    return oc_resp.get("data", {}).get("oc")
+
 
 # =================================================
-# MAX PAIN
+# MAX PAIN CALCULATION
 # =================================================
-def build_max_pain(cfg, expiry=None):
+def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
+
     df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
     df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
     df["timestamp"] = (
         pd.to_datetime(df["timestamp"], errors="coerce")
         .dt.strftime("%Y-%m-%d %H:%M")
     )
+
     df = df.dropna(subset=["Strike", "Max Pain"])
 
     strikes = sorted(df["Strike"].unique())
@@ -195,10 +188,20 @@ def build_max_pain(cfg, expiry=None):
     below = [s for s in strikes if s <= center][-35:]
     above = [s for s in strikes if s > center][:36]
     strikes = sorted(set(below + above))
+
     df = df[df["Strike"].isin(strikes)]
 
-    mp1 = df[df["timestamp"] == t1_full].groupby("Strike")["Max Pain"].mean() / 100
-    mp2 = df[df["timestamp"] == t2_full].groupby("Strike")["Max Pain"].mean() / 100
+    mp1 = (
+        df[df["timestamp"] == t1_full]
+        .groupby("Strike")["Max Pain"]
+        .mean() / 100
+    )
+
+    mp2 = (
+        df[df["timestamp"] == t2_full]
+        .groupby("Strike")["Max Pain"]
+        .mean() / 100
+    )
 
     final = pd.DataFrame({
         "Strike": mp1.index,
@@ -207,7 +210,7 @@ def build_max_pain(cfg, expiry=None):
         f"MP ({t2})": mp2.reindex(mp1.index).values,
     })
 
-    oc = fetch_live_oc(cfg, expiry)
+    oc = fetch_live_oc(cfg)
     if oc:
         rows = []
         for s in strikes:
@@ -221,15 +224,19 @@ def build_max_pain(cfg, expiry=None):
             })
 
         live = pd.DataFrame(rows).sort_values("Strike")
+
         A, B = live["CE LTP"], live["CE OI"]
         G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
         final[f"MP ({now})"] = [
-            ((-sum(A[i:] * B[i:])
-              + G.iloc[i] * sum(B[:i]) - sum(G[:i] * B[:i])
-              - sum(M[:i] * L[:i])
-              + sum(G[i:] * L[i:]) - G.iloc[i] * sum(L[i:])
-             ) / 10000) / 100
+            (
+                -sum(A[i:] * B[i:])
+                + G.iloc[i] * sum(B[:i])
+                - sum(G[:i] * B[:i])
+                - sum(M[:i] * L[:i])
+                + sum(G[i:] * L[i:])
+                - G.iloc[i] * sum(L[i:])
+            ) / 1_000_000
             for i in range(len(live))
         ]
 
@@ -239,6 +246,7 @@ def build_max_pain(cfg, expiry=None):
 
     return final.round(0).astype("Int64").reset_index(drop=True)
 
+
 # =================================================
 # DISPLAY
 # =================================================
@@ -247,8 +255,7 @@ st.subheader("📌 MAX PAIN")
 
 for name, cfg in CFG.items():
 
-    expiry = selected_nifty_expiry if name == "NIFTY" else None
-    table_full = build_max_pain(cfg, expiry)
+    table_full = build_max_pain(cfg)
 
     spot = get_yahoo_price(cfg["yahoo"])
     table = atm_slice(table_full, spot)
