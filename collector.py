@@ -1,4 +1,5 @@
 # collector.py
+
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
@@ -11,10 +12,10 @@ ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5
 API_BASE = "https://api.dhan.co/v2"
 
 UNDERLYINGS = {
-    "NIFTY":       {"scrip": 13,  "seg": "IDX_I", "center": 26000},
-    "BANKNIFTY":   {"scrip": 25,  "seg": "IDX_I", "center": 60000},
-    "MIDCPNIFTY":  {"scrip": 442, "seg": "IDX_I", "center": 13600},
-    "SENSEX":      {"scrip": 51,  "seg": "IDX_I", "center": 84000},  # ✅ ADDED
+    "NIFTY":      {"scrip": 13,  "seg": "IDX_I", "center": 26000},
+    "BANKNIFTY":  {"scrip": 25,  "seg": "IDX_I", "center": 60000},
+    "MIDCPNIFTY": {"scrip": 442, "seg": "IDX_I", "center": 13600},
+    "SENSEX":     {"scrip": 51,  "seg": "IDX_I", "center": 84000},
 }
 
 HEADERS = {
@@ -37,29 +38,39 @@ BASE_COLUMNS = [
     "Max Pain",
 ]
 
-
-for sym in ["nifty", "banknifty", "midcpnifty", "sensex"]:  # ✅ added sensex
+for sym in ["nifty", "banknifty", "midcpnifty", "sensex"]:
     path = os.path.join(DATA_DIR, f"{sym}.csv")
     if not os.path.exists(path):
         pd.DataFrame(columns=BASE_COLUMNS).to_csv(path, index=False)
 
-# ================= API =================
+# ================= API FUNCTIONS =================
 def get_expiries(scrip, seg):
     r = requests.post(
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
-        json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg},
+        json={
+            "UnderlyingScrip": scrip,
+            "UnderlyingSeg": seg
+        }
     )
-    return r.json().get("data", []) if r.status_code == 200 else []
+    if r.status_code == 200:
+        return r.json().get("data", [])
+    return []
 
 
 def get_option_chain(scrip, seg, expiry):
     r = requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
-        json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg, "Expiry": expiry},
+        json={
+            "UnderlyingScrip": scrip,
+            "UnderlyingSeg": seg,
+            "Expiry": expiry
+        }
     )
-    return r.json().get("data") if r.status_code == 200 else None
+    if r.status_code == 200:
+        return r.json().get("data")
+    return None
 
 
 # ================= MAX PAIN =================
@@ -67,17 +78,18 @@ def compute_max_pain(df):
     A = df["CE LTP"].fillna(0)
     B = df["CE OI"].fillna(0)
     G = df["Strike"]
-    L = df["PE OI"].fillna(0)
     M = df["PE LTP"].fillna(0)
+    L = df["PE OI"].fillna(0)
 
     mp = []
     for i in range(len(df)):
-        mp.append(int((
+        val = (
             -sum(A[i:] * B[i:])
-            + G[i] * sum(B[:i]) - sum(G[:i] * B[:i])
+            + G.iloc[i] * sum(B[:i]) - sum(G[:i] * B[:i])
             - sum(M[:i] * L[:i])
-            + sum(G[i:] * L[i:]) - G[i] * sum(L[i:])
-        ) / 10000))
+            + sum(G[i:] * L[i:]) - G.iloc[i] * sum(L[i:])
+        )
+        mp.append(int(val / 10000))
 
     df["Max Pain"] = mp
     return df
@@ -107,34 +119,36 @@ def main():
         center = cfg["center"]
         below = [s for s in strikes if s <= center][-35:]
         above = [s for s in strikes if s > center][:36]
-        selected = set(below + above)
+        selected = sorted(set(below + above))
 
         rows = []
+
         for s in selected:
             v = oc.get(f"{s:.6f}", {})
-            ce, pe = v.get("ce", {}), v.get("pe", {})
+            ce = v.get("ce", {})
+            pe = v.get("pe", {})
 
-           rows.append({
-            "Strike": int(s),
-        
-            "CE LTP": ce.get("last_price"),
-            "CE OI": ce.get("oi"),
-            "CE Volume": ce.get("volume"),
-            "CE IV": ce.get("implied_volatility"),
-            "CE Delta": ce.get("greeks", {}).get("delta"),
-            "CE Gamma": ce.get("greeks", {}).get("gamma"),
-            "CE Vega": ce.get("greeks", {}).get("vega"),
-        
-            "PE LTP": pe.get("last_price"),
-            "PE OI": pe.get("oi"),
-            "PE Volume": pe.get("volume"),
-            "PE IV": pe.get("implied_volatility"),
-            "PE Delta": pe.get("greeks", {}).get("delta"),
-            "PE Gamma": pe.get("greeks", {}).get("gamma"),
-            "PE Vega": pe.get("greeks", {}).get("vega"),
-        
-            "timestamp": ts,
-        })
+            rows.append({
+                "Strike": int(s),
+
+                "CE LTP": ce.get("last_price"),
+                "CE OI": ce.get("oi"),
+                "CE Volume": ce.get("volume"),
+                "CE IV": ce.get("implied_volatility"),
+                "CE Delta": ce.get("greeks", {}).get("delta"),
+                "CE Gamma": ce.get("greeks", {}).get("gamma"),
+                "CE Vega": ce.get("greeks", {}).get("vega"),
+
+                "PE LTP": pe.get("last_price"),
+                "PE OI": pe.get("oi"),
+                "PE Volume": pe.get("volume"),
+                "PE IV": pe.get("implied_volatility"),
+                "PE Delta": pe.get("greeks", {}).get("delta"),
+                "PE Gamma": pe.get("greeks", {}).get("gamma"),
+                "PE Vega": pe.get("greeks", {}).get("vega"),
+
+                "timestamp": ts,
+            })
 
         if not rows:
             continue
@@ -142,7 +156,7 @@ def main():
         df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
         # FORCE NUMERIC
-       num_cols = [
+        num_cols = [
             "CE LTP","CE OI","CE Volume","CE IV","CE Delta","CE Gamma","CE Vega",
             "PE LTP","PE OI","PE Volume","PE IV","PE Delta","PE Gamma","PE Vega"
         ]
@@ -156,7 +170,7 @@ def main():
         # COLUMN ORDER LOCK
         df = df[BASE_COLUMNS]
 
-        out = f"{DATA_DIR}/{sym.lower()}.csv"
+        out = os.path.join(DATA_DIR, f"{sym.lower()}.csv")
         df.to_csv(out, mode="a", header=not os.path.exists(out), index=False)
 
         print(f"[OK] {sym} saved @ {ts}")
