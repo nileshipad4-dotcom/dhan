@@ -29,11 +29,14 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # ================= BASE CSV =================
 BASE_COLUMNS = [
     "Strike",
-    "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
-    "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega",
+
+    "CE LTP","CE OI","CE Volume","CE IV","CE Delta","CE Gamma","CE Vega",
+    "PE LTP","PE OI","PE Volume","PE IV","PE Delta","PE Gamma","PE Vega",
+
     "timestamp",
     "Max Pain",
 ]
+
 
 for sym in ["nifty", "banknifty", "midcpnifty", "sensex"]:  # ✅ added sensex
     path = os.path.join(DATA_DIR, f"{sym}.csv")
@@ -111,25 +114,27 @@ def main():
             v = oc.get(f"{s:.6f}", {})
             ce, pe = v.get("ce", {}), v.get("pe", {})
 
-            rows.append({
-                "Strike": int(s),
-
-                "CE LTP": ce.get("last_price"),
-                "CE OI": ce.get("oi"),
-                "CE IV": ce.get("implied_volatility"),
-                "CE Delta": ce.get("greeks", {}).get("delta"),
-                "CE Gamma": ce.get("greeks", {}).get("gamma"),
-                "CE Vega": ce.get("greeks", {}).get("vega"),
-
-                "PE LTP": pe.get("last_price"),
-                "PE OI": pe.get("oi"),
-                "PE IV": pe.get("implied_volatility"),
-                "PE Delta": pe.get("greeks", {}).get("delta"),
-                "PE Gamma": pe.get("greeks", {}).get("gamma"),
-                "PE Vega": pe.get("greeks", {}).get("vega"),
-
-                "timestamp": ts,
-            })
+           rows.append({
+            "Strike": int(s),
+        
+            "CE LTP": ce.get("last_price"),
+            "CE OI": ce.get("oi"),
+            "CE Volume": ce.get("volume"),
+            "CE IV": ce.get("implied_volatility"),
+            "CE Delta": ce.get("greeks", {}).get("delta"),
+            "CE Gamma": ce.get("greeks", {}).get("gamma"),
+            "CE Vega": ce.get("greeks", {}).get("vega"),
+        
+            "PE LTP": pe.get("last_price"),
+            "PE OI": pe.get("oi"),
+            "PE Volume": pe.get("volume"),
+            "PE IV": pe.get("implied_volatility"),
+            "PE Delta": pe.get("greeks", {}).get("delta"),
+            "PE Gamma": pe.get("greeks", {}).get("gamma"),
+            "PE Vega": pe.get("greeks", {}).get("vega"),
+        
+            "timestamp": ts,
+        })
 
         if not rows:
             continue
@@ -137,10 +142,11 @@ def main():
         df = pd.DataFrame(rows).sort_values("Strike").reset_index(drop=True)
 
         # FORCE NUMERIC
-        num_cols = [
-            "CE LTP","CE OI","CE IV","CE Delta","CE Gamma","CE Vega",
-            "PE LTP","PE OI","PE IV","PE Delta","PE Gamma","PE Vega"
+       num_cols = [
+            "CE LTP","CE OI","CE Volume","CE IV","CE Delta","CE Gamma","CE Vega",
+            "PE LTP","PE OI","PE Volume","PE IV","PE Delta","PE Gamma","PE Vega"
         ]
+
         for c in num_cols:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
