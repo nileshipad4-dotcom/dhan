@@ -9,7 +9,6 @@ from streamlit_autorefresh import st_autorefresh
 # AUTO REFRESH
 # =================================================
 st_autorefresh(interval=60_000, key="auto_refresh")
-
 STRIKE_RANGE = 10
 
 # =================================================
@@ -28,8 +27,8 @@ def ist_hhmm():
 @st.cache_data(ttl=30)
 def get_yahoo_price(symbol):
     try:
-        data = yf.Ticker(symbol).history(period="1d", interval="1m")
-        return int(data["Close"].iloc[-1]) if not data.empty else None
+        d = yf.Ticker(symbol).history(period="1d", interval="1m")
+        return int(d["Close"].iloc[-1]) if not d.empty else None
     except:
         return None
 
@@ -39,7 +38,7 @@ def atm_slice(df, spot, n=STRIKE_RANGE):
         return df
     atm = min(df["Strike"], key=lambda x: abs(x - spot))
     idx = df.index[df["Strike"] == atm][0]
-    return df.iloc[max(0, idx - n): idx + n + 1].reset_index(drop=True)
+    return df.iloc[max(0, idx-n):idx+n+1].reset_index(drop=True)
 
 
 def get_spot_band(strikes, spot):
@@ -49,12 +48,10 @@ def get_spot_band(strikes, spot):
     upper = min([s for s in strikes if s > spot], default=None)
     return {lower, upper}
 
-
 # =================================================
 # CONFIG
 # =================================================
 API_BASE = "https://api.dhan.co/v2"
-
 HEADERS = {
     "client-id": "1102712380",
     "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3ODMxNzA0LCJpYXQiOjE3Njc3NDUzMDQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.cNABkyWQ26WzvubzFqFNaNM0ahoV8ozWaYSJnkUbNyvF1sDsd3nOc0KMJM2wdcC9B9nHsXTyRFlkRFjTLKw4YQ",
@@ -82,16 +79,14 @@ CFG = {
 # LOAD CSVs
 # =================================================
 dfs = {}
-for name, cfg in CFG.items():
+for k, cfg in CFG.items():
     df = pd.read_csv(cfg["csv"])
-    df["timestamp"] = (
-        pd.to_datetime(df["timestamp"], errors="coerce")
-        .dt.strftime("%Y-%m-%d %H:%M")
-    )
-    dfs[name] = df
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce") \
+                        .dt.strftime("%Y-%m-%d %H:%M")
+    dfs[k] = df
 
 # =================================================
-# FILTER TIMESTAMPS (08:00–16:30)
+# TIME FILTER (08:00–16:30)
 # =================================================
 def valid_time(ts):
     try:
@@ -102,14 +97,13 @@ def valid_time(ts):
 
 common_times = sorted(
     [t for t in set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG]) if valid_time(t)],
-    reverse=True,
+    reverse=True
 )
 
 # =================================================
 # TIMESTAMP SELECTION
 # =================================================
 st.subheader("⏱ Timestamp Selection")
-
 t1_full = st.selectbox("Time-1 (Latest)", common_times, 0)
 t2_full = st.selectbox("Time-2 (Previous)", common_times, 1)
 
@@ -154,11 +148,12 @@ def build_max_pain(cfg):
     df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M")
 
     strikes = sorted(df["Strike"].unique())
-    center = cfg["center"]
+    c = cfg["center"]
 
-    below = [s for s in strikes if s <= center][-35:]
-    above = [s for s in strikes if s > center][:36]
-    strikes = sorted(set(below + above))
+    strikes = sorted(set(
+        [s for s in strikes if s <= c][-35:] +
+        [s for s in strikes if s > c][:36]
+    ))
 
     df = df[df["Strike"].isin(strikes)]
 
@@ -175,18 +170,20 @@ def build_max_pain(cfg):
 
     rows = []
     for s in final["Strike"]:
-        v = oc.get(f"{float(s):.6f}", {})
+        key = f"{int(s)}.000000"   # 🔥 FIXED KEY FORMAT
+        v = oc.get(key, {})
         rows.append({
             "Strike": s,
-            "CE LTP": v.get("ce", {}).get("last_price", 0),
             "CE OI": v.get("ce", {}).get("oi", 0),
             "CE Vol": v.get("ce", {}).get("volume", 0),
-            "PE LTP": v.get("pe", {}).get("last_price", 0),
             "PE OI": v.get("pe", {}).get("oi", 0),
             "PE Vol": v.get("pe", {}).get("volume", 0),
+            "CE LTP": v.get("ce", {}).get("last_price", 0),
+            "PE LTP": v.get("pe", {}).get("last_price", 0),
         })
 
-    live = pd.DataFrame(rows)
+    live = pd.DataFrame(rows).set_index("Strike") \
+            .reindex(final["Strike"]).fillna(0).reset_index()
 
     A, B = live["CE LTP"], live["CE OI"]
     G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
@@ -208,8 +205,7 @@ def build_max_pain(cfg):
     t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
     t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
 
-    def d(x):
-        return (x / 10000).round(0).astype("Int64")
+    def d(x): return (x / 10000).round(0).astype("Int64")
 
     final["Δ CE OI (Live−T1)"] = d(live["CE OI"] - t1_df["CE OI"].reindex(final["Strike"]))
     final["Δ PE OI (Live−T1)"] = d(live["PE OI"] - t1_df["PE OI"].reindex(final["Strike"]))
@@ -230,42 +226,31 @@ st.divider()
 st.subheader("📌 MAX PAIN")
 
 for name, cfg in CFG.items():
-    table_full = build_max_pain(cfg)
-    spot = get_yahoo_price(cfg["yahoo"])
-    table = atm_slice(table_full, spot)
-
-    band = get_spot_band(table["Strike"].tolist(), spot)
+    table = atm_slice(build_max_pain(cfg), get_yahoo_price(cfg["yahoo"]))
 
     mp_col = f"MP ({now})"
-    if mp_col in table.columns and table[mp_col].notna().any():
-        min_strike = table.loc[table[mp_col].idxmin(), "Strike"]
-    else:
-        min_strike = None
+    min_strike = table.loc[table[mp_col].idxmin(), "Strike"] \
+        if mp_col in table and table[mp_col].notna().any() else None
 
-    st.markdown(f"## {name} : {spot if spot else 'N/A'}")
+    band = get_spot_band(table["Strike"].tolist(), get_yahoo_price(cfg["yahoo"]))
+
+    st.markdown(f"## {name}")
 
     def style_row(row):
-        cols = list(row.index)
-        styles = [""] * len(cols)
+        styles = [""] * len(row)
 
-        # Base highlight
         if min_strike is not None and row["Strike"] == min_strike:
-            base = "background-color:#8B0000;color:white"
+            styles = ["background-color:#8B0000;color:white"] * len(row)
         elif row["Strike"] in band:
-            base = "background-color:#00008B;color:white"
-        else:
-            base = ""
+            styles = ["background-color:#00008B;color:white"] * len(row)
 
-        for i in range(len(styles)):
-            styles[i] = base
+        cols = list(row.index)
 
-        # Pairwise CE vs PE (guarded)
         def pair(c1, c2):
             i1, i2 = cols.index(c1), cols.index(c2)
-            v1, v2 = row[c1], row[c2]
-            if pd.isna(v1) or pd.isna(v2):
+            if pd.isna(row[c1]) or pd.isna(row[c2]):
                 return
-            color = "#8B0000" if v1 > v2 else "#006400"
+            color = "#8B0000" if row[c1] > row[c2] else "#006400"
             styles[i1] = styles[i2] = f"background-color:{color};color:white"
 
         pair("Δ CE Vol (Live−T1)", "Δ PE Vol (Live−T1)")
