@@ -37,20 +37,16 @@ def get_yahoo_price(symbol):
 def atm_slice(df, spot, n=STRIKE_RANGE):
     if df.empty or spot is None:
         return df
-
     atm = min(df["Strike"], key=lambda x: abs(x - spot))
     idx = df.index[df["Strike"] == atm][0]
-
     return df.iloc[max(0, idx - n): idx + n + 1].reset_index(drop=True)
 
 
 def get_spot_band(strikes, spot):
     if spot is None:
         return set()
-
     lower = max([s for s in strikes if s <= spot], default=None)
     upper = min([s for s in strikes if s > spot], default=None)
-
     return {lower, upper}
 
 
@@ -61,7 +57,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3ODMxNzA0LCJpYXQiOjE3Njc3NDUzMDQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.cNABkyWQ26WzvubzFqFNaNM0ahoV8ozWaYSJnkUbNyvF1sDsd3nOc0KMJM2wdcC9B9nHsXTyRFlkRFjTLKw4YQ",
+    "access-token": "YOUR_TOKEN",
     "Content-Type": "application/json",
 }
 
@@ -100,7 +96,6 @@ CFG = {
 # LOAD CSVs
 # =================================================
 dfs = {}
-
 for name, cfg in CFG.items():
     df = pd.read_csv(cfg["csv"])
     df["timestamp"] = (
@@ -108,14 +103,6 @@ for name, cfg in CFG.items():
         .dt.strftime("%Y-%m-%d %H:%M")
     )
     dfs[name] = df
-
-# Auto refresh on new rows
-row_signature = tuple(len(dfs[k]) for k in CFG)
-if "last_row_signature" not in st.session_state:
-    st.session_state.last_row_signature = row_signature
-elif row_signature != st.session_state.last_row_signature:
-    st.session_state.last_row_signature = row_signature
-    st.rerun()
 
 common_times = sorted(
     set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG]),
@@ -135,71 +122,44 @@ t2 = t2_full[-5:]
 now = ist_hhmm()
 
 # =================================================
-# OPTION CHAIN (DEFAULT EXPIRY)
+# OPTION CHAIN (LIVE)
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc(cfg):
-    exp_resp = requests.post(
+    exp = requests.post(
         f"{API_BASE}/optionchain/expirylist",
         headers=HEADERS,
-        json={
-            "UnderlyingScrip": cfg["scrip"],
-            "UnderlyingSeg": cfg["seg"],
-        },
-    ).json()
+        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
+    ).json()["data"][0]
 
-    expiries = exp_resp.get("data", [])
-    if not expiries:
-        return None
-
-    oc_resp = requests.post(
+    oc = requests.post(
         f"{API_BASE}/optionchain",
         headers=HEADERS,
         json={
             "UnderlyingScrip": cfg["scrip"],
             "UnderlyingSeg": cfg["seg"],
-            "Expiry": expiries[0],
+            "Expiry": exp,
         },
     ).json()
 
-    return oc_resp.get("data", {}).get("oc")
+    return oc["data"]["oc"]
 
 
 # =================================================
-# MAX PAIN
+# MAX PAIN + OI/VOL DELTAS
 # =================================================
 def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
-
-    df["Strike"] = pd.to_numeric(df["Strike"], errors="coerce")
-    df["Max Pain"] = pd.to_numeric(df["Max Pain"], errors="coerce")
     df["timestamp"] = (
         pd.to_datetime(df["timestamp"], errors="coerce")
         .dt.strftime("%Y-%m-%d %H:%M")
     )
 
-    df = df.dropna(subset=["Strike", "Max Pain"])
-
     strikes = sorted(df["Strike"].unique())
-    center = cfg["center"]
-
-    below = [s for s in strikes if s <= center][-35:]
-    above = [s for s in strikes if s > center][:36]
-    strikes = sorted(set(below + above))
-
     df = df[df["Strike"].isin(strikes)]
 
-    mp1 = (
-        df[df["timestamp"] == t1_full]
-        .groupby("Strike")["Max Pain"]
-        .mean() / 100
-    )
-
-    mp2 = (
-        df[df["timestamp"] == t2_full]
-        .groupby("Strike")["Max Pain"]
-        .mean() / 100
-    )
+    mp1 = df[df["timestamp"] == t1_full].groupby("Strike")["Max Pain"].mean() / 100
+    mp2 = df[df["timestamp"] == t2_full].groupby("Strike")["Max Pain"].mean() / 100
 
     final = pd.DataFrame({
         "Strike": mp1.index,
@@ -209,40 +169,50 @@ def build_max_pain(cfg):
     })
 
     oc = fetch_live_oc(cfg)
-    if oc:
-        rows = []
-        for s in strikes:
-            v = oc.get(f"{float(s):.6f}", {})
-            rows.append({
-                "Strike": s,
-                "CE LTP": v.get("ce", {}).get("last_price", 0),
-                "CE OI": v.get("ce", {}).get("oi", 0),
-                "PE LTP": v.get("pe", {}).get("last_price", 0),
-                "PE OI": v.get("pe", {}).get("oi", 0),
-            })
 
-        live = pd.DataFrame(rows).sort_values("Strike")
+    rows = []
+    for strike in final["Strike"]:
+        v = oc.get(f"{float(strike):.6f}", {})
+        rows.append({
+            "Strike": strike,
+            "CE LTP": v.get("ce", {}).get("last_price", 0),
+            "CE OI": v.get("ce", {}).get("oi", 0),
+            "CE Vol": v.get("ce", {}).get("volume", 0),
+            "PE LTP": v.get("pe", {}).get("last_price", 0),
+            "PE OI": v.get("pe", {}).get("oi", 0),
+            "PE Vol": v.get("pe", {}).get("volume", 0),
+        })
 
-        A, B = live["CE LTP"], live["CE OI"]
-        G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
+    live = pd.DataFrame(rows).sort_values("Strike")
 
-        final[f"MP ({now})"] = [
-            (
-                (-sum(A[i:] * B[i:])
-                 + G.iloc[i] * sum(B[:i])
-                 - sum(G[:i] * B[:i])
-                 - sum(M[:i] * L[:i])
-                 + sum(G[i:] * L[i:])
-                 - G.iloc[i] * sum(L[i:])
-                ) / 10000
-            ) / 100
-            for i in range(len(live))
-        ]
+    final[f"MP ({now})"] = (
+        (-live["CE LTP"] * live["CE OI"]).cumsum()[::-1].values
+        + (live["Strike"] * live["CE OI"]).cumsum().values
+        - (live["Strike"] * live["CE OI"]).cumsum().shift(fill_value=0).values
+        - (live["PE LTP"] * live["PE OI"]).cumsum().values
+        + (live["Strike"] * live["PE OI"]).cumsum()[::-1].values
+        - (live["Strike"] * live["PE OI"]).cumsum()[::-1].shift(fill_value=0).values
+    ) / 1000000
 
+    # Deltas
     final[f"Δ MP ({now}−{t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final[f"Δ MP ({t1}−{t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
-    final["ΔΔ MP"] = final[f"Δ MP ({now}−{t1})"].diff()
 
+    # OI / VOL deltas
+    t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
+    t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
+
+    final["Δ CE OI (Live−T1)"] = live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values
+    final["Δ PE OI (Live−T1)"] = live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values
+    final["Δ CE Vol (Live−T1)"] = live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values
+    final["Δ PE Vol (Live−T1)"] = live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values
+
+    final["Δ CE OI (T1−T2)"] = t1_df["CE OI"].reindex(final["Strike"]).values - t2_df["CE OI"].reindex(final["Strike"]).values
+    final["Δ PE OI (T1−T2)"] = t1_df["PE OI"].reindex(final["Strike"]).values - t2_df["PE OI"].reindex(final["Strike"]).values
+    final["Δ CE Vol (T1−T2)"] = t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values
+    final["Δ PE Vol (T1−T2)"] = t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values
+
+    # Final formatting
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 
@@ -255,7 +225,6 @@ st.subheader("📌 MAX PAIN")
 for name, cfg in CFG.items():
 
     table_full = build_max_pain(cfg)
-
     spot = get_yahoo_price(cfg["yahoo"])
     table = atm_slice(table_full, spot)
 
@@ -277,6 +246,7 @@ for name, cfg in CFG.items():
             return ["background-color:#00008B;color:white"] * len(row)
         return [""] * len(row)
 
+    # HIDE ΔΔ MP BY NOT INCLUDING IT (it is not present here)
     st.dataframe(
         table.style.apply(highlight_mp, axis=1),
         use_container_width=True,
