@@ -29,8 +29,8 @@ def ist_hhmm():
 def get_yahoo_price(symbol):
     try:
         data = yf.Ticker(symbol).history(period="1d", interval="1m")
-        return float(data["Close"].iloc[-1]) if not data.empty else None
-    except Exception:
+        return int(data["Close"].iloc[-1]) if not data.empty else None
+    except:
         return None
 
 
@@ -57,7 +57,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3ODMxNzA0LCJpYXQiOjE3Njc3NDUzMDQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.cNABkyWQ26WzvubzFqFNaNM0ahoV8ozWaYSJnkUbNyvF1sDsd3nOc0KMJM2wdcC9B9nHsXTyRFlkRFjTLKw4YQ",
+    "access-token": "YOUR_TOKEN",
     "Content-Type": "application/json",
 }
 
@@ -109,9 +109,8 @@ common_times = sorted(
 # TIMESTAMP SELECTION
 # =================================================
 st.subheader("⏱ Timestamp Selection")
-
-t1_full = st.selectbox("Time-1 (Latest)", common_times, index=0)
-t2_full = st.selectbox("Time-2 (Previous)", common_times, index=1)
+t1_full = st.selectbox("Time-1 (Latest)", common_times, 0)
+t2_full = st.selectbox("Time-2 (Previous)", common_times, 1)
 
 t1 = t1_full[-5:]
 t2 = t2_full[-5:]
@@ -147,30 +146,36 @@ def fetch_live_oc(cfg):
         return {}
 
 # =================================================
-# BUILD MAX PAIN + DELTAS
+# BUILD MAX PAIN (ORIGINAL FORMULA)
 # =================================================
 def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
     df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M")
 
-    t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
-    t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
+    strikes = sorted(df["Strike"].unique())
+    center = cfg["center"]
 
-    mp1 = t1_df["Max Pain"] / 100
-    mp2 = t2_df["Max Pain"] / 100
+    below = [s for s in strikes if s <= center][-35:]
+    above = [s for s in strikes if s > center][:36]
+    strikes = sorted(set(below + above))
+
+    df = df[df["Strike"].isin(strikes)]
+
+    mp1 = df[df["timestamp"] == t1_full].groupby("Strike")["Max Pain"].mean() / 100
+    mp2 = df[df["timestamp"] == t2_full].groupby("Strike")["Max Pain"].mean() / 100
 
     final = pd.DataFrame({
-        "Strike": mp1.index,
-        f"MP ({t1})": mp1.values,
-        f"MP ({t2})": mp2.reindex(mp1.index).values,
+        "Strike": mp1.index.astype(int),
+        f"MP ({t1})": mp1.round(0).astype("Int64"),
+        f"MP ({t2})": mp2.reindex(mp1.index).round(0).astype("Int64"),
     })
 
     oc = fetch_live_oc(cfg)
 
-    live_rows = []
+    rows = []
     for s in final["Strike"]:
         v = oc.get(f"{float(s):.6f}", {})
-        live_rows.append({
+        rows.append({
             "Strike": s,
             "CE LTP": v.get("ce", {}).get("last_price", 0),
             "CE OI": v.get("ce", {}).get("oi", 0),
@@ -180,25 +185,41 @@ def build_max_pain(cfg):
             "PE Vol": v.get("pe", {}).get("volume", 0),
         })
 
-    live = pd.DataFrame(live_rows)
+    live = pd.DataFrame(rows)
 
-    final[f"MP ({now})"] = final[f"MP ({t1})"]  # placeholder for continuity
+    A, B = live["CE LTP"], live["CE OI"]
+    G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
-    final[f"Δ MP ({now}−{t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
-    final[f"Δ MP ({t1}−{t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
+    final[f"MP ({now})"] = (
+        (-A * B).cumsum()[::-1].values
+        + (G * B).cumsum().values
+        - (G * B).cumsum().shift(fill_value=0).values
+        - (M * L).cumsum().values
+        + (G * L).cumsum()[::-1].values
+        - (G * L).cumsum()[::-1].shift(fill_value=0).values
+    ) / 1000000
 
-    # ---- OI / VOL deltas (÷10000)
-    final["Δ CE OI (Live−T1)"] = (live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values) / 10000
-    final["Δ PE OI (Live−T1)"] = (live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values) / 10000
-    final["Δ CE Vol (Live−T1)"] = (live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values) / 10000
-    final["Δ PE Vol (Live−T1)"] = (live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values) / 10000
+    final[f"MP ({now})"] = final[f"MP ({now})"].round(0).astype("Int64")
 
-    final["Δ CE OI (T1−T2)"] = (t1_df["CE OI"] - t2_df["CE OI"]).reindex(final["Strike"]).values / 10000
-    final["Δ PE OI (T1−T2)"] = (t1_df["PE OI"] - t2_df["PE OI"]).reindex(final["Strike"]).values / 10000
-    final["Δ CE Vol (T1−T2)"] = (t1_df["CE Volume"] - t2_df["CE Volume"]).reindex(final["Strike"]).values / 10000
-    final["Δ PE Vol (T1−T2)"] = (t1_df["PE Volume"] - t2_df["PE Volume"]).reindex(final["Strike"]).values / 10000
+    final[f"Δ MP ({now}−{t1})"] = (final[f"MP ({now})"] - final[f"MP ({t1})"]).astype("Int64")
+    final[f"Δ MP ({t1}−{t2})"] = (final[f"MP ({t1})"] - final[f"MP ({t2})"]).astype("Int64")
 
-    return final.round(2)
+    t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
+    t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
+
+    def d(x): return (x / 10000).round(0).astype("Int64")
+
+    final["Δ CE OI (Live−T1)"] = d(live["CE OI"] - t1_df["CE OI"].reindex(final["Strike"]))
+    final["Δ PE OI (Live−T1)"] = d(live["PE OI"] - t1_df["PE OI"].reindex(final["Strike"]))
+    final["Δ CE Vol (Live−T1)"] = d(live["CE Vol"] - t1_df["CE Volume"].reindex(final["Strike"]))
+    final["Δ PE Vol (Live−T1)"] = d(live["PE Vol"] - t1_df["PE Volume"].reindex(final["Strike"]))
+
+    final["Δ CE OI (T1−T2)"] = d(t1_df["CE OI"].reindex(final["Strike"]) - t2_df["CE OI"].reindex(final["Strike"]))
+    final["Δ PE OI (T1−T2)"] = d(t1_df["PE OI"].reindex(final["Strike"]) - t2_df["PE OI"].reindex(final["Strike"]))
+    final["Δ CE Vol (T1−T2)"] = d(t1_df["CE Volume"].reindex(final["Strike"]) - t2_df["CE Volume"].reindex(final["Strike"]))
+    final["Δ PE Vol (T1−T2)"] = d(t1_df["PE Volume"].reindex(final["Strike"]) - t2_df["PE Volume"].reindex(final["Strike"]))
+
+    return final
 
 # =================================================
 # DISPLAY
@@ -212,21 +233,26 @@ for name, cfg in CFG.items():
     table = atm_slice(table_full, spot)
 
     band = get_spot_band(table["Strike"].tolist(), spot)
-    min_strike = table.loc[table[f"MP ({t1})"].idxmin(), "Strike"]
+    min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
 
-    st.markdown(f"## {name} : {int(spot) if spot else 'N/A'}")
+    st.markdown(f"## {name} : {spot if spot else 'N/A'}")
 
     def style_row(row):
-        styles = [""] * len(row)
         cols = list(row.index)
+        styles = [""] * len(cols)
 
-        # MP highlights
+        # base highlight
         if row["Strike"] == min_strike:
-            styles = ["background-color:#8B0000;color:white"] * len(row)
+            base = "background-color:#8B0000;color:white"
         elif row["Strike"] in band:
-            styles = ["background-color:#00008B;color:white"] * len(row)
+            base = "background-color:#00008B;color:white"
+        else:
+            base = ""
 
-        # Pairwise CE vs PE coloring
+        for i in range(len(styles)):
+            styles[i] = base
+
+        # CE vs PE override (ONLY these columns)
         def pair(c1, c2):
             i1, i2 = cols.index(c1), cols.index(c2)
             color = "#8B0000" if row[c1] > row[c2] else "#006400"
