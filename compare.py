@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from streamlit_autorefresh import st_autorefresh
 
 # =================================================
@@ -57,7 +57,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3ODMxNzA0LCJpYXQiOjE3Njc3NDUzMDQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.cNABkyWQ26WzvubzFqFNaNM0ahoV8ozWaYSJnkUbNyvF1sDsd3nOc0KMJM2wdcC9B9nHsXTyRFlkRFjTLKw4YQ",
+    "access-token": "YOUR_TOKEN",
     "Content-Type": "application/json",
 }
 
@@ -104,8 +104,21 @@ for name, cfg in CFG.items():
     )
     dfs[name] = df
 
+# =================================================
+# TIMESTAMP FILTER (08:00–16:00)
+# =================================================
+def valid_time(ts):
+    try:
+        hh, mm = map(int, ts[-5:].split(":"))
+        return time(8, 0) <= time(hh, mm) <= time(16, 0)
+    except:
+        return False
+
 common_times = sorted(
-    set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG]),
+    [
+        t for t in set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG])
+        if valid_time(t)
+    ],
     reverse=True,
 )
 
@@ -215,7 +228,6 @@ def build_max_pain(cfg):
     t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
     t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
 
-    # ---- divide ONLY required 8 columns by 10000 ----
     final["Δ CE OI (Live−T1)"] = (live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values) / 10000
     final["Δ PE OI (Live−T1)"] = (live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values) / 10000
     final["Δ CE Vol (Live−T1)"] = (live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values) / 10000
@@ -226,7 +238,6 @@ def build_max_pain(cfg):
     final["Δ CE Vol (T1−T2)"] = (t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values) / 10000
     final["Δ PE Vol (T1−T2)"] = (t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values) / 10000
 
-    # ---- remove decimals everywhere ----
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 
