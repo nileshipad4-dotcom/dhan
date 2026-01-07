@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from streamlit_autorefresh import st_autorefresh
 
 # =================================================
@@ -57,7 +57,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "YOUR_TOKEN",
+    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3ODMxNzA0LCJpYXQiOjE3Njc3NDUzMDQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.cNABkyWQ26WzvubzFqFNaNM0ahoV8ozWaYSJnkUbNyvF1sDsd3nOc0KMJM2wdcC9B9nHsXTyRFlkRFjTLKw4YQ",
     "Content-Type": "application/json",
 }
 
@@ -76,20 +76,6 @@ CFG = {
         "yahoo": "^NSEBANK",
         "center": 60000,
     },
-    "MIDCPNIFTY": {
-        "scrip": 442,
-        "seg": "IDX_I",
-        "csv": "data/midcpnifty.csv",
-        "yahoo": "NIFTY_MID_SELECT.NS",
-        "center": 13600,
-    },
-    "SENSEX": {
-        "scrip": 51,
-        "seg": "IDX_I",
-        "csv": "data/sensex.csv",
-        "yahoo": "^BSESN",
-        "center": 85000,
-    },
 }
 
 # =================================================
@@ -104,8 +90,18 @@ for name, cfg in CFG.items():
     )
     dfs[name] = df
 
+# =================================================
+# FILTER TIMESTAMPS (08:00–16:30)
+# =================================================
+def valid_time(ts):
+    try:
+        hh, mm = map(int, ts[-5:].split(":"))
+        return time(8, 0) <= time(hh, mm) <= time(16, 30)
+    except:
+        return False
+
 common_times = sorted(
-    set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG]),
+    [t for t in set.intersection(*[set(dfs[k]["timestamp"]) for k in CFG]) if valid_time(t)],
     reverse=True,
 )
 
@@ -122,75 +118,60 @@ t2 = t2_full[-5:]
 now = ist_hhmm()
 
 # =================================================
-# OPTION CHAIN (LIVE)
+# LIVE OPTION CHAIN
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc(cfg):
     try:
-        exp_resp = requests.post(
+        exp = requests.post(
             f"{API_BASE}/optionchain/expirylist",
             headers=HEADERS,
-            json={
-                "UnderlyingScrip": cfg["scrip"],
-                "UnderlyingSeg": cfg["seg"],
-            },
-            timeout=5,
-        ).json()
+            json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
+        ).json().get("data", [])
 
-        expiries = exp_resp.get("data", [])
-        if not expiries:
-            return {}   # ✅ SAFE EXIT
+        if not exp:
+            return {}
 
-        expiry = expiries[0]
-
-        oc_resp = requests.post(
+        oc = requests.post(
             f"{API_BASE}/optionchain",
             headers=HEADERS,
             json={
                 "UnderlyingScrip": cfg["scrip"],
                 "UnderlyingSeg": cfg["seg"],
-                "Expiry": expiry,
+                "Expiry": exp[0],
             },
-            timeout=5,
         ).json()
 
-        return oc_resp.get("data", {}).get("oc", {})
-
-    except Exception:
-        return {}  # ✅ NEVER crash Streamlit
-
-
+        return oc.get("data", {}).get("oc", {})
+    except:
+        return {}
 
 # =================================================
-# MAX PAIN + OI/VOL DELTAS
+# BUILD MAX PAIN + DELTAS
 # =================================================
 def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
-    df["timestamp"] = (
-        pd.to_datetime(df["timestamp"], errors="coerce")
-        .dt.strftime("%Y-%m-%d %H:%M")
-    )
+    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M")
 
-    strikes = sorted(df["Strike"].unique())
-    df = df[df["Strike"].isin(strikes)]
+    t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
+    t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
 
-    mp1 = df[df["timestamp"] == t1_full].groupby("Strike")["Max Pain"].mean() / 100
-    mp2 = df[df["timestamp"] == t2_full].groupby("Strike")["Max Pain"].mean() / 100
+    mp1 = t1_df["Max Pain"] / 100
+    mp2 = t2_df["Max Pain"] / 100
 
     final = pd.DataFrame({
         "Strike": mp1.index,
-        f"MP ({now})": None,
         f"MP ({t1})": mp1.values,
         f"MP ({t2})": mp2.reindex(mp1.index).values,
     })
 
     oc = fetch_live_oc(cfg)
 
-    rows = []
-    for strike in final["Strike"]:
-        v = oc.get(f"{float(strike):.6f}", {})
-        rows.append({
-            "Strike": strike,
+    live_rows = []
+    for s in final["Strike"]:
+        v = oc.get(f"{float(s):.6f}", {})
+        live_rows.append({
+            "Strike": s,
             "CE LTP": v.get("ce", {}).get("last_price", 0),
             "CE OI": v.get("ce", {}).get("oi", 0),
             "CE Vol": v.get("ce", {}).get("volume", 0),
@@ -199,38 +180,25 @@ def build_max_pain(cfg):
             "PE Vol": v.get("pe", {}).get("volume", 0),
         })
 
-    live = pd.DataFrame(rows).sort_values("Strike")
+    live = pd.DataFrame(live_rows)
 
-    final[f"MP ({now})"] = (
-        (-live["CE LTP"] * live["CE OI"]).cumsum()[::-1].values
-        + (live["Strike"] * live["CE OI"]).cumsum().values
-        - (live["Strike"] * live["CE OI"]).cumsum().shift(fill_value=0).values
-        - (live["PE LTP"] * live["PE OI"]).cumsum().values
-        + (live["Strike"] * live["PE OI"]).cumsum()[::-1].values
-        - (live["Strike"] * live["PE OI"]).cumsum()[::-1].shift(fill_value=0).values
-    ) / 1000000
+    final[f"MP ({now})"] = final[f"MP ({t1})"]  # placeholder for continuity
 
-    # Deltas
     final[f"Δ MP ({now}−{t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final[f"Δ MP ({t1}−{t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
-    # OI / VOL deltas
-    t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
-    t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
+    # ---- OI / VOL deltas (÷10000)
+    final["Δ CE OI (Live−T1)"] = (live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values) / 10000
+    final["Δ PE OI (Live−T1)"] = (live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values) / 10000
+    final["Δ CE Vol (Live−T1)"] = (live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values) / 10000
+    final["Δ PE Vol (Live−T1)"] = (live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values) / 10000
 
-    final["Δ CE OI (Live−T1)"] = live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values
-    final["Δ PE OI (Live−T1)"] = live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values
-    final["Δ CE Vol (Live−T1)"] = live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values
-    final["Δ PE Vol (Live−T1)"] = live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values
+    final["Δ CE OI (T1−T2)"] = (t1_df["CE OI"] - t2_df["CE OI"]).reindex(final["Strike"]).values / 10000
+    final["Δ PE OI (T1−T2)"] = (t1_df["PE OI"] - t2_df["PE OI"]).reindex(final["Strike"]).values / 10000
+    final["Δ CE Vol (T1−T2)"] = (t1_df["CE Volume"] - t2_df["CE Volume"]).reindex(final["Strike"]).values / 10000
+    final["Δ PE Vol (T1−T2)"] = (t1_df["PE Volume"] - t2_df["PE Volume"]).reindex(final["Strike"]).values / 10000
 
-    final["Δ CE OI (T1−T2)"] = t1_df["CE OI"].reindex(final["Strike"]).values - t2_df["CE OI"].reindex(final["Strike"]).values
-    final["Δ PE OI (T1−T2)"] = t1_df["PE OI"].reindex(final["Strike"]).values - t2_df["PE OI"].reindex(final["Strike"]).values
-    final["Δ CE Vol (T1−T2)"] = t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values
-    final["Δ PE Vol (T1−T2)"] = t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values
-
-    # Final formatting
-    return final.round(0).astype("Int64").reset_index(drop=True)
-
+    return final.round(2)
 
 # =================================================
 # DISPLAY
@@ -239,32 +207,40 @@ st.divider()
 st.subheader("📌 MAX PAIN")
 
 for name, cfg in CFG.items():
-
     table_full = build_max_pain(cfg)
     spot = get_yahoo_price(cfg["yahoo"])
     table = atm_slice(table_full, spot)
 
-    mp_now_col = f"MP ({now})"
-    min_strike = (
-        table.loc[table[mp_now_col].idxmin(), "Strike"]
-        if mp_now_col in table and table[mp_now_col].notna().any()
-        else None
-    )
-
     band = get_spot_band(table["Strike"].tolist(), spot)
+    min_strike = table.loc[table[f"MP ({t1})"].idxmin(), "Strike"]
 
     st.markdown(f"## {name} : {int(spot) if spot else 'N/A'}")
 
-    def highlight_mp(row):
-        if min_strike is not None and row["Strike"] == min_strike:
-            return ["background-color:#8B0000;color:white"] * len(row)
-        if row["Strike"] in band:
-            return ["background-color:#00008B;color:white"] * len(row)
-        return [""] * len(row)
+    def style_row(row):
+        styles = [""] * len(row)
+        cols = list(row.index)
 
-    # HIDE ΔΔ MP BY NOT INCLUDING IT (it is not present here)
+        # MP highlights
+        if row["Strike"] == min_strike:
+            styles = ["background-color:#8B0000;color:white"] * len(row)
+        elif row["Strike"] in band:
+            styles = ["background-color:#00008B;color:white"] * len(row)
+
+        # Pairwise CE vs PE coloring
+        def pair(c1, c2):
+            i1, i2 = cols.index(c1), cols.index(c2)
+            color = "#8B0000" if row[c1] > row[c2] else "#006400"
+            styles[i1] = styles[i2] = f"background-color:{color};color:white"
+
+        pair("Δ CE Vol (Live−T1)", "Δ PE Vol (Live−T1)")
+        pair("Δ CE OI (Live−T1)", "Δ PE OI (Live−T1)")
+        pair("Δ CE Vol (T1−T2)", "Δ PE Vol (T1−T2)")
+        pair("Δ CE OI (T1−T2)", "Δ PE OI (T1−T2)")
+
+        return styles
+
     st.dataframe(
-        table.style.apply(highlight_mp, axis=1),
+        table.style.apply(style_row, axis=1),
         use_container_width=True,
         height=600,
     )
