@@ -255,7 +255,15 @@ for name, cfg in CFG.items():
         # CE vs PE override (ONLY these columns)
         def pair(c1, c2):
             i1, i2 = cols.index(c1), cols.index(c2)
-            color = "#8B0000" if row[c1] > row[c2] else "#006400"
+        
+            v1 = row[c1]
+            v2 = row[c2]
+        
+            # ---- GUARD AGAINST pd.NA ----
+            if pd.isna(v1) or pd.isna(v2):
+                return  # keep base highlight, do nothing
+        
+            color = "#8B0000" if v1 > v2 else "#006400"
             styles[i1] = styles[i2] = f"background-color:{color};color:white"
 
         pair("Δ CE Vol (Live−T1)", "Δ PE Vol (Live−T1)")
