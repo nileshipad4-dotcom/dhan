@@ -109,6 +109,7 @@ common_times = sorted(
 # TIMESTAMP SELECTION
 # =================================================
 st.subheader("⏱ Timestamp Selection")
+
 t1_full = st.selectbox("Time-1 (Latest)", common_times, 0)
 t2_full = st.selectbox("Time-2 (Previous)", common_times, 1)
 
@@ -146,7 +147,7 @@ def fetch_live_oc(cfg):
         return {}
 
 # =================================================
-# BUILD MAX PAIN (ORIGINAL FORMULA)
+# BUILD MAX PAIN
 # =================================================
 def build_max_pain(cfg):
     df = pd.read_csv(cfg["csv"])
@@ -191,13 +192,13 @@ def build_max_pain(cfg):
     G, L, M = live["Strike"], live["PE OI"], live["PE LTP"]
 
     final[f"MP ({now})"] = (
-        (-A * B).cumsum()[::-1].values
-        + (G * B).cumsum().values
-        - (G * B).cumsum().shift(fill_value=0).values
-        - (M * L).cumsum().values
-        + (G * L).cumsum()[::-1].values
-        - (G * L).cumsum()[::-1].shift(fill_value=0).values
-    ) / 1000000
+        (-A * B).cumsum()[::-1]
+        + (G * B).cumsum()
+        - (G * B).cumsum().shift(fill_value=0)
+        - (M * L).cumsum()
+        + (G * L).cumsum()[::-1]
+        - (G * L).cumsum()[::-1].shift(fill_value=0)
+    ) / 1_000_000
 
     final[f"MP ({now})"] = final[f"MP ({now})"].round(0).astype("Int64")
 
@@ -207,7 +208,8 @@ def build_max_pain(cfg):
     t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
     t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
 
-    def d(x): return (x / 10000).round(0).astype("Int64")
+    def d(x):
+        return (x / 10000).round(0).astype("Int64")
 
     final["Δ CE OI (Live−T1)"] = d(live["CE OI"] - t1_df["CE OI"].reindex(final["Strike"]))
     final["Δ PE OI (Live−T1)"] = d(live["PE OI"] - t1_df["PE OI"].reindex(final["Strike"]))
@@ -233,7 +235,12 @@ for name, cfg in CFG.items():
     table = atm_slice(table_full, spot)
 
     band = get_spot_band(table["Strike"].tolist(), spot)
-    min_strike = table.loc[table[f"MP ({now})"].idxmin(), "Strike"]
+
+    mp_col = f"MP ({now})"
+    if mp_col in table.columns and table[mp_col].notna().any():
+        min_strike = table.loc[table[mp_col].idxmin(), "Strike"]
+    else:
+        min_strike = None
 
     st.markdown(f"## {name} : {spot if spot else 'N/A'}")
 
@@ -241,8 +248,8 @@ for name, cfg in CFG.items():
         cols = list(row.index)
         styles = [""] * len(cols)
 
-        # base highlight
-        if row["Strike"] == min_strike:
+        # Base highlight
+        if min_strike is not None and row["Strike"] == min_strike:
             base = "background-color:#8B0000;color:white"
         elif row["Strike"] in band:
             base = "background-color:#00008B;color:white"
@@ -252,17 +259,12 @@ for name, cfg in CFG.items():
         for i in range(len(styles)):
             styles[i] = base
 
-        # CE vs PE override (ONLY these columns)
+        # Pairwise CE vs PE (guarded)
         def pair(c1, c2):
             i1, i2 = cols.index(c1), cols.index(c2)
-        
-            v1 = row[c1]
-            v2 = row[c2]
-        
-            # ---- GUARD AGAINST pd.NA ----
+            v1, v2 = row[c1], row[c2]
             if pd.isna(v1) or pd.isna(v2):
-                return  # keep base highlight, do nothing
-        
+                return
             color = "#8B0000" if v1 > v2 else "#006400"
             styles[i1] = styles[i2] = f"background-color:{color};color:white"
 
