@@ -57,7 +57,7 @@ API_BASE = "https://api.dhan.co/v2"
 
 HEADERS = {
     "client-id": "1102712380",
-    "access-token": "YOUR_TOKEN",
+    "access-token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY3ODMxNzA0LCJpYXQiOjE3Njc3NDUzMDQsInRva2VuQ29uc3VtZXJUeXBlIjoiU0VMRiIsIndlYmhvb2tVcmwiOiIiLCJkaGFuQ2xpZW50SWQiOiIxMTAyNzEyMzgwIn0.cNABkyWQ26WzvubzFqFNaNM0ahoV8ozWaYSJnkUbNyvF1sDsd3nOc0KMJM2wdcC9B9nHsXTyRFlkRFjTLKw4YQ",
     "Content-Type": "application/json",
 }
 
@@ -139,7 +139,7 @@ def fetch_live_oc(cfg):
 
         expiries = exp_resp.get("data", [])
         if not expiries:
-            return {}   # ✅ SAFE EXIT
+            return {}
 
         expiry = expiries[0]
 
@@ -157,8 +157,7 @@ def fetch_live_oc(cfg):
         return oc_resp.get("data", {}).get("oc", {})
 
     except Exception:
-        return {}  # ✅ NEVER crash Streamlit
-
+        return {}
 
 
 # =================================================
@@ -210,25 +209,24 @@ def build_max_pain(cfg):
         - (live["Strike"] * live["PE OI"]).cumsum()[::-1].shift(fill_value=0).values
     ) / 1000000
 
-    # Deltas
     final[f"Δ MP ({now}−{t1})"] = final[f"MP ({now})"] - final[f"MP ({t1})"]
     final[f"Δ MP ({t1}−{t2})"] = final[f"MP ({t1})"] - final[f"MP ({t2})"]
 
-    # OI / VOL deltas
     t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
     t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
 
-    final["Δ CE OI (Live−T1)"] = live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values
-    final["Δ PE OI (Live−T1)"] = live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values
-    final["Δ CE Vol (Live−T1)"] = live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values
-    final["Δ PE Vol (Live−T1)"] = live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values
+    # ---- divide ONLY required 8 columns by 10000 ----
+    final["Δ CE OI (Live−T1)"] = (live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values) / 10000
+    final["Δ PE OI (Live−T1)"] = (live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values) / 10000
+    final["Δ CE Vol (Live−T1)"] = (live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values) / 10000
+    final["Δ PE Vol (Live−T1)"] = (live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values) / 10000
 
-    final["Δ CE OI (T1−T2)"] = t1_df["CE OI"].reindex(final["Strike"]).values - t2_df["CE OI"].reindex(final["Strike"]).values
-    final["Δ PE OI (T1−T2)"] = t1_df["PE OI"].reindex(final["Strike"]).values - t2_df["PE OI"].reindex(final["Strike"]).values
-    final["Δ CE Vol (T1−T2)"] = t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values
-    final["Δ PE Vol (T1−T2)"] = t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values
+    final["Δ CE OI (T1−T2)"] = (t1_df["CE OI"].reindex(final["Strike"]).values - t2_df["CE OI"].reindex(final["Strike"]).values) / 10000
+    final["Δ PE OI (T1−T2)"] = (t1_df["PE OI"].reindex(final["Strike"]).values - t2_df["PE OI"].reindex(final["Strike"]).values) / 10000
+    final["Δ CE Vol (T1−T2)"] = (t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values) / 10000
+    final["Δ PE Vol (T1−T2)"] = (t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values) / 10000
 
-    # Final formatting
+    # ---- remove decimals everywhere ----
     return final.round(0).astype("Int64").reset_index(drop=True)
 
 
@@ -262,7 +260,6 @@ for name, cfg in CFG.items():
             return ["background-color:#00008B;color:white"] * len(row)
         return [""] * len(row)
 
-    # HIDE ΔΔ MP BY NOT INCLUDING IT (it is not present here)
     st.dataframe(
         table.style.apply(highlight_mp, axis=1),
         use_container_width=True,
