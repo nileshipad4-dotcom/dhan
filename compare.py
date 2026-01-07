@@ -126,23 +126,39 @@ now = ist_hhmm()
 # =================================================
 @st.cache_data(ttl=30)
 def fetch_live_oc(cfg):
-    exp = requests.post(
-        f"{API_BASE}/optionchain/expirylist",
-        headers=HEADERS,
-        json={"UnderlyingScrip": cfg["scrip"], "UnderlyingSeg": cfg["seg"]},
-    ).json()["data"][0]
+    try:
+        exp_resp = requests.post(
+            f"{API_BASE}/optionchain/expirylist",
+            headers=HEADERS,
+            json={
+                "UnderlyingScrip": cfg["scrip"],
+                "UnderlyingSeg": cfg["seg"],
+            },
+            timeout=5,
+        ).json()
 
-    oc = requests.post(
-        f"{API_BASE}/optionchain",
-        headers=HEADERS,
-        json={
-            "UnderlyingScrip": cfg["scrip"],
-            "UnderlyingSeg": cfg["seg"],
-            "Expiry": exp,
-        },
-    ).json()
+        expiries = exp_resp.get("data", [])
+        if not expiries:
+            return {}   # ✅ SAFE EXIT
 
-    return oc["data"]["oc"]
+        expiry = expiries[0]
+
+        oc_resp = requests.post(
+            f"{API_BASE}/optionchain",
+            headers=HEADERS,
+            json={
+                "UnderlyingScrip": cfg["scrip"],
+                "UnderlyingSeg": cfg["seg"],
+                "Expiry": expiry,
+            },
+            timeout=5,
+        ).json()
+
+        return oc_resp.get("data", {}).get("oc", {})
+
+    except Exception:
+        return {}  # ✅ NEVER crash Streamlit
+
 
 
 # =================================================
