@@ -244,16 +244,16 @@ def build_max_pain(cfg):
     t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
 
     if delta_mode == "Live − T1":
-        final["Δ CE OI"] = (live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values) / 10000
-        final["Δ PE OI"] = (live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values) / 10000
-        final["Δ CE Vol"] = (live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values) / 10000
-        final["Δ PE Vol"] = (live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values) / 10000
+        final["Δ CE OI"] = (live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values) / 100
+        final["Δ PE OI"] = (live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values) / 100
+        final["Δ CE Vol"] = (live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values) / 1000
+        final["Δ PE Vol"] = (live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values) / 1000
     
     else:  # T1 − T2
-        final["Δ CE OI"] = (t1_df["CE OI"].reindex(final["Strike"]).values - t2_df["CE OI"].reindex(final["Strike"]).values) / 10000
-        final["Δ PE OI"] = (t1_df["PE OI"].reindex(final["Strike"]).values - t2_df["PE OI"].reindex(final["Strike"]).values) / 10000
-        final["Δ CE Vol"] = (t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values) / 10000
-        final["Δ PE Vol"] = (t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values) / 10000
+        final["Δ CE OI"] = (t1_df["CE OI"].reindex(final["Strike"]).values - t2_df["CE OI"].reindex(final["Strike"]).values) / 100
+        final["Δ PE OI"] = (t1_df["PE OI"].reindex(final["Strike"]).values - t2_df["PE OI"].reindex(final["Strike"]).values) / 100
+        final["Δ CE Vol"] = (t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values) / 1000
+        final["Δ PE Vol"] = (t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values) / 1000
 
 
     return final.round(0).astype("Int64").reset_index(drop=True)
