@@ -136,6 +136,19 @@ t1 = t1_full[-5:]
 t2 = t2_full[-5:]
 now = ist_hhmm()
 
+
+# =================================================
+# TTODDLE BETWEEN LIVE - T1 and T1-T2
+# =================================================
+
+st.subheader("📊 Delta Mode")
+
+delta_mode = st.radio(
+    "Choose Delta View",
+    ["Live − T1", "T1 − T2"],
+    horizontal=True
+)
+
 # =================================================
 # OPTION CHAIN (LIVE)
 # =================================================
@@ -230,15 +243,18 @@ def build_max_pain(cfg):
     t1_df = df[df["timestamp"] == t1_full].groupby("Strike").sum()
     t2_df = df[df["timestamp"] == t2_full].groupby("Strike").sum()
 
-    final["Δ CE OI (Live−T1)"] = (live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values) / 10000
-    final["Δ PE OI (Live−T1)"] = (live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values) / 10000
-    final["Δ CE Vol (Live−T1)"] = (live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values) / 10000
-    final["Δ PE Vol (Live−T1)"] = (live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values) / 10000
+    if delta_mode == "Live − T1":
+        final["Δ CE OI"] = (live["CE OI"].values - t1_df["CE OI"].reindex(final["Strike"]).values) / 10000
+        final["Δ PE OI"] = (live["PE OI"].values - t1_df["PE OI"].reindex(final["Strike"]).values) / 10000
+        final["Δ CE Vol"] = (live["CE Vol"].values - t1_df["CE Volume"].reindex(final["Strike"]).values) / 10000
+        final["Δ PE Vol"] = (live["PE Vol"].values - t1_df["PE Volume"].reindex(final["Strike"]).values) / 10000
+    
+    else:  # T1 − T2
+        final["Δ CE OI"] = (t1_df["CE OI"].reindex(final["Strike"]).values - t2_df["CE OI"].reindex(final["Strike"]).values) / 10000
+        final["Δ PE OI"] = (t1_df["PE OI"].reindex(final["Strike"]).values - t2_df["PE OI"].reindex(final["Strike"]).values) / 10000
+        final["Δ CE Vol"] = (t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values) / 10000
+        final["Δ PE Vol"] = (t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values) / 10000
 
-    final["Δ CE OI (T1−T2)"] = (t1_df["CE OI"].reindex(final["Strike"]).values - t2_df["CE OI"].reindex(final["Strike"]).values) / 10000
-    final["Δ PE OI (T1−T2)"] = (t1_df["PE OI"].reindex(final["Strike"]).values - t2_df["PE OI"].reindex(final["Strike"]).values) / 10000
-    final["Δ CE Vol (T1−T2)"] = (t1_df["CE Volume"].reindex(final["Strike"]).values - t2_df["CE Volume"].reindex(final["Strike"]).values) / 10000
-    final["Δ PE Vol (T1−T2)"] = (t1_df["PE Volume"].reindex(final["Strike"]).values - t2_df["PE Volume"].reindex(final["Strike"]).values) / 10000
 
     return final.round(0).astype("Int64").reset_index(drop=True)
 
